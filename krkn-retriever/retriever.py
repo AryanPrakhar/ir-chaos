@@ -3,6 +3,8 @@ import re
 import pickle
 import argparse
 import sys
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 import numpy as np
 import faiss
@@ -184,6 +186,29 @@ def display_results(result):
         print(f"  [{i}] {r['name']:<40} | Cross-Encoder: {r['score']:>7.4f} | FAISS: {r['retrieval_score']:>7.4f}")
     print("=" * 95)
 
+def export_results(query, results, output_path, ranker, include_text=False):
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "query": query,
+        "results": [],
+    }
+
+    for r in results:
+        row = {
+            "id": r["id"],
+            "name": r["name"],
+            "score": r["score"],
+            "retrieval_score": r["retrieval_score"],
+        }
+        if include_text:
+            row["text"] = ranker.doc_texts.get(r["id"], "")
+        payload["results"].append(row)
+
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"Exported retrieval payload to: {out_path}")
+
 def main():
     parser = argparse.ArgumentParser(description="Two-stage retrieval (SentenceTransformers + Reranker)")
     subparsers = parser.add_subparsers(dest="cmd")
@@ -196,6 +221,8 @@ def main():
     query_parser.add_argument("--retrieve-k", type=int, default=10, help="FAISS candidate pool size (default: 10)")
     query_parser.add_argument("--rerank-k", type=int, default=5, help="Top results after Cross-Encoder reranking (default: 5)")
     query_parser.add_argument("--interactive", "-i", action="store_true")
+    query_parser.add_argument("--export", default=None, help="Write query + top results to JSON (for inference handoff)")
+    query_parser.add_argument("--include-text", action="store_true", help="Include full scenario text in exported JSON")
 
     args = parser.parse_args()
 
@@ -220,6 +247,8 @@ def main():
             print(f"\nSearching for: {args.query}")
             res = ranker.find_match(args.query, args.retrieve_k, args.rerank_k)
             display_results(res[:5])
+            if args.export:
+                export_results(args.query, res, args.export, ranker, include_text=args.include_text)
 
 if __name__ == "__main__":
     main()
