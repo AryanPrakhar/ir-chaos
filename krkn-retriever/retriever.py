@@ -54,7 +54,11 @@ class CrossEncoderRanker:
     def _init_models(self):
         if self.cross_encoder is None:
             print(f"Loading Cross-Encoder: {self.cross_encoder_model_name}")
-            self.cross_encoder = FlagReranker(self.cross_encoder_model_name, use_fp16=True)
+            # fp16 helps on GPU; on CPU it can slow down or be unsupported.
+            self.cross_encoder = FlagReranker(
+                self.cross_encoder_model_name,
+                use_fp16=(self.device == "cuda"),
+            )
 
         if self.retriever is None:
             print(f"Loading Qwen Embedding Model: {self.retriever_model_name}")

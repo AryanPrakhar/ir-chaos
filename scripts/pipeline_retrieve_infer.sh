@@ -19,6 +19,9 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SHARED_DIR="$ROOT_DIR/shared"
 INDEX_FILE="$ROOT_DIR/krkn-retriever/faiss-index/krkn-scenarios.index"
 META_FILE="$ROOT_DIR/krkn-retriever/faiss-index/krkn-scenarios.meta"
+HF_CACHE_DIR="${HF_CACHE_DIR:-$ROOT_DIR/.cache/huggingface}"
+TORCH_CACHE_DIR="${TORCH_CACHE_DIR:-$ROOT_DIR/.cache/torch}"
+
 
 # Recommended small-but-strong local model for llama.cpp inference.
 DEFAULT_MODEL_PATH="$ROOT_DIR/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf"
@@ -34,6 +37,8 @@ MODEL_DIR="$(dirname "$MODEL_PATH")"
 MODEL_FILE="$(basename "$MODEL_PATH")"
 
 mkdir -p "$SHARED_DIR"
+mkdir -p "$HF_CACHE_DIR"
+mkdir -p "$TORCH_CACHE_DIR"
 
 echo "[1/5] Ensuring retrieval image exists"
 if podman image exists krkn-retriever:v1; then
@@ -57,7 +62,12 @@ else
   podman run --rm \
     -v "$ROOT_DIR/krkn-retriever:/app:Z" \
     -v "$ROOT_DIR/docs:/app/docs:Z" \
+    -v "$HF_CACHE_DIR:/root/.cache/huggingface:Z" \
+    -v "$TORCH_CACHE_DIR:/root/.cache/torch:Z" \
     -e DOCS_DIR=/app/docs \
+    -e HF_HOME=/root/.cache/huggingface \
+    -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
+    -e TORCH_HOME=/root/.cache/torch \
     -w /app \
     krkn-retriever:v1 \
     python3 retriever.py index
@@ -68,7 +78,12 @@ podman run --rm \
   -v "$ROOT_DIR/krkn-retriever:/app:Z" \
   -v "$ROOT_DIR/docs:/app/docs:Z" \
   -v "$SHARED_DIR:/io:Z" \
+  -v "$HF_CACHE_DIR:/root/.cache/huggingface:Z" \
+  -v "$TORCH_CACHE_DIR:/root/.cache/torch:Z" \
   -e DOCS_DIR=/app/docs \
+  -e HF_HOME=/root/.cache/huggingface \
+  -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
+  -e TORCH_HOME=/root/.cache/torch \
   -w /app \
   krkn-retriever:v1 \
   python3 retriever.py query "$QUERY" --retrieve-k 10 --rerank-k 5 --export /io/retrieval_output.json --include-text
@@ -81,9 +96,12 @@ podman run --rm \
   python3 /app/run_inference.py \
     --input /io/retrieval_output.json \
     --output /io/inference_output.json \
-    --model "/models/$MODEL_FILE"
+    --model "/models/$MODEL_FILE" \
+    --top-k-contexts 1
 
 echo "Done. Files written:"
 echo "  $SHARED_DIR/retrieval_output.json"
 echo "  $SHARED_DIR/inference_output.json"
 echo "Model used: $MODEL_PATH"
+echo "HF cache used: $HF_CACHE_DIR"
+echo "Torch cache used: $TORCH_CACHE_DIR"
