@@ -1,0 +1,365 @@
+[
+  {
+    "query": "Drop all database tables by wiping the entire logical boundary.",
+    "label": "service-disruption-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Consume 100 percent of the processing cores on the underlying hardware.",
+    "label": "node-cpu-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Generate massive amounts of dummy files to max out the attached disk space.",
+    "label": "pvc-scenario"
+  ,"type": "paraphrase"},
+  {
+    "query": "Intercept inbound requests and serve a fake 500 Internal Server Error instead.",
+    "label": "service-hijacking"
+  ,"type": "paraphrase"},
+  {
+    "query": "Push a massive volume of half-open TCP requests to the target port.",
+    "label": "syn-flood"
+  ,"type": "paraphrase"},
+  {
+    "query": "Turn off all worker and control plane instances simultaneously for twenty minutes.",
+    "label": "power-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Forcefully stop and then restart the underlying cloud virtual machine.",
+    "label": "node-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Use baseboard management controller credentials to hard reset the physical server.",
+    "label": "node-scenarios-bm"
+  ,"type": "paraphrase"},
+  {
+    "query": "Alter the system clock forward by 5 hours on a specific worker.",
+    "label": "time-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Isolate a whole cloud region by dropping all packets at the VPC level.",
+    "label": "zone-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Prevent a specific microservice from reaching out to external APIs via network restrictions.",
+    "label": "pod-network-chaos"
+  ,"type": "paraphrase"},
+  {
+    "query": "Inject artificial delay and jitter into the host's primary ethernet interface.",
+    "label": "network-chaos"
+  ,"type": "paraphrase"},
+  {
+    "query": "Send a termination signal to the Docker process running the database.",
+    "label": "container-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Completely exhaust the available Random Access Memory on the worker machine.",
+    "label": "node-memory-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Overload the storage drive on the host machine with constant sequential writes.",
+    "label": "node-io-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Apply low-level packet filtering rules directly onto the host's network interfaces.",
+    "label": "node-network-filter"
+  ,"type": "paraphrase"},
+  {
+    "query": "Deploy a privileged daemon to block specific incoming ports right at the workload level.",
+    "label": "pod-network-filter"
+  ,"type": "paraphrase"},
+  {
+    "query": "Evict the currently running instances of the frontend deployment.",
+    "label": "pod-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Make the main ingress routes completely inaccessible for a specific duration.",
+    "label": "application-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Erase the KubeVirt virtual machine object and verify it spins back up.",
+    "label": "kubevirt-outage"
+  ,"type": "paraphrase"},
+  {
+    "query": "Max out the disk utilization of the persistent claim until it hits full capacity.",
+    "label": "pvc-scenario"
+  ,"type": "paraphrase"},
+  {
+    "query": "Sever all ingress and egress capabilities for an entire sub-network in the cloud.",
+    "label": "zone-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Simulate a blackout by shutting down the entire platform infrastructure.",
+    "label": "power-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Spike the read and write operations on the underlying host to create a bottleneck.",
+    "label": "node-io-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Bombard the service with connection initiation packets without completing the handshake.",
+    "label": "syn-flood"
+  ,"type": "paraphrase"},
+  {
+    "query": "Spin up threads to artificially max out the master node's processors.",
+    "label": "node-cpu-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Erase the entire namespace and all the resources contained within it.",
+    "label": "service-disruption-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Kill the underlying container runtime process for a specific component.",
+    "label": "container-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Cut off internet access to a specific running web component.",
+    "label": "pod-network-chaos"
+  ,"type": "paraphrase"},
+  {
+    "query": "Reroute legitimate traffic away from the intended destination to our own endpoint.",
+    "label": "service-hijacking"
+  }
+
+  ,
+  {
+    "query": "Make the web service unreachable for external clients for ten minutes.",
+    "label": "application-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Send a hang-up signal to the main process inside the docker runtime.",
+    "label": "container-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Delete the guest operating system instance from the hypervisor.",
+    "label": "kubevirt-outage"
+  ,"type": "paraphrase"},
+  {
+    "query": "Throttle the bandwidth and introduce latency on the master's ethernet port.",
+    "label": "network-chaos"
+  ,"type": "paraphrase"},
+  {
+    "query": "Saturate the processors on a target compute instance.",
+    "label": "node-cpu-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Hammer the local block storage with constant read and write ops.",
+    "label": "node-io-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Fill up the physical RAM on the worker machine to cause an out-of-memory state.",
+    "label": "node-memory-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Apply iptables rules on the host to drop incoming connections on port 8080.",
+    "label": "node-network-filter"
+  ,"type": "paraphrase"},
+  {
+    "query": "Reboot the virtualized compute nodes on the AWS backend.",
+    "label": "node-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Trigger a hard power cycle on the physical bare-metal hardware.",
+    "label": "node-scenarios-bm"
+  ,"type": "paraphrase"},
+  {
+    "query": "Block egress traffic for a specific group of containers using labels.",
+    "label": "pod-network-chaos"
+  ,"type": "paraphrase"},
+  {
+    "query": "Inject a privileged workload to firewall off specific TCP ports for a running app.",
+    "label": "pod-network-filter"
+  ,"type": "paraphrase"},
+  {
+    "query": "Randomly crash active replicas in the production deployment.",
+    "label": "pod-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Simulate a complete facility blackout by stopping all cluster machines.",
+    "label": "power-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Write junk data to the attached volume until it runs out of free blocks.",
+    "label": "pvc-scenario"
+  ,"type": "paraphrase"},
+  {
+    "query": "Purge all resources inside the etcd project scope.",
+    "label": "service-disruption-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Steal HTTP traffic from the target app and return custom JSON payloads.",
+    "label": "service-hijacking"
+  ,"type": "paraphrase"},
+  {
+    "query": "Overwhelm the target's transmission control protocol queue with incomplete handshakes.",
+    "label": "syn-flood"
+  ,"type": "paraphrase"},
+  {
+    "query": "Desynchronize the system clock on the worker by a few days.",
+    "label": "time-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Isolate an availability zone by dropping all traffic at the virtual private cloud level.",
+    "label": "zone-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Run stress workers to peg the system load average to maximum.",
+    "label": "node-cpu-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Create a severe disk bottleneck on the underlying worker.",
+    "label": "node-io-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Force the operating system to start swapping heavily by eating all free memory.",
+    "label": "node-memory-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Turn off the cluster as if the cloud provider pulled the plug.",
+    "label": "power-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Initiate a massive wave of connection setups without acknowledging the server's response.",
+    "label": "syn-flood"
+  ,"type": "paraphrase"},
+  {
+    "query": "Consume all remaining inodes and storage space on the mounted drive.",
+    "label": "pvc-scenario"
+  ,"type": "paraphrase"},
+  {
+    "query": "Terminate the OpenShift CNV guest instance to test automatic recreation.",
+    "label": "kubevirt-outage"
+  ,"type": "paraphrase"},
+  {
+    "query": "Disrupt the ingress routes so end users get timeout errors.",
+    "label": "application-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Deploy a rogue web server to intercept and mock the API responses.",
+    "label": "service-hijacking"
+  ,"type": "paraphrase"},
+  {
+    "query": "Skew the date backward on the host to see if TLS certificates fail validation.",
+    "label": "time-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Halt all user requests going into the main web portal.",
+    "label": "application-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Terminate the docker process executing the API.",
+    "label": "container-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Crash the virtualized environment hosted on KubeVirt.",
+    "label": "kubevirt-outage"
+  ,"type": "paraphrase"},
+  {
+    "query": "Artificially slow down the outgoing packets from the master server.",
+    "label": "network-chaos"
+  ,"type": "paraphrase"},
+  {
+    "query": "Create a synthetic load to max out the host's processors.",
+    "label": "node-cpu-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Saturate the disk throughput on the worker instance.",
+    "label": "node-io-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Drain all available RAM on the underlying compute node.",
+    "label": "node-memory-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Use iptables on the worker node to reject incoming port 80 traffic.",
+    "label": "node-network-filter"
+  ,"type": "paraphrase"},
+  {
+    "query": "Execute a forced restart on the cloud provider's compute instance.",
+    "label": "node-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Perform a cold boot via IPMI on the physical data center rack.",
+    "label": "node-scenarios-bm"
+  ,"type": "paraphrase"},
+  {
+    "query": "Block outbound connectivity for a specific set of microservices.",
+    "label": "pod-network-chaos"
+  ,"type": "paraphrase"},
+  {
+    "query": "Deploy a daemon to firewall specific ports on a running application.",
+    "label": "pod-network-filter"
+  ,"type": "paraphrase"},
+  {
+    "query": "Randomly terminate active instances of the backend service.",
+    "label": "pod-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Simulate a total datacenter failure by turning off all machines.",
+    "label": "power-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Consume all the provisioned disk capacity on the attached block storage.",
+    "label": "pvc-scenario"
+  ,"type": "paraphrase"},
+  {
+    "query": "Clear out an entire project space and all its active components.",
+    "label": "service-disruption-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Capture live traffic and respond with custom mock data.",
+    "label": "service-hijacking"
+  ,"type": "paraphrase"},
+  {
+    "query": "Barrage the target service with incomplete TCP handshake initialization packets.",
+    "label": "syn-flood"
+  ,"type": "paraphrase"},
+  {
+    "query": "Desync the system clock on the database pod.",
+    "label": "time-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Isolate a specific availability zone by cutting off all VPC routing.",
+    "label": "zone-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Starve the node of CPU cycles by launching aggressive stress threads.",
+    "label": "node-cpu-hog"
+  ,"type": "paraphrase"},
+  {
+    "query": "Sever the ingress pathways making the frontend totally unresponsive.",
+    "label": "application-outages"
+  ,"type": "paraphrase"},
+  {
+    "query": "Write gigabytes of random bytes until the mounted volume is 100% full.",
+    "label": "pvc-scenario"
+  ,"type": "paraphrase"},
+  {
+    "query": "Annihilate all objects residing within the specified logical boundary.",
+    "label": "service-disruption-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Exhaust the target's connection backlog with dummy TCP SYN requests.",
+    "label": "syn-flood"
+  ,"type": "paraphrase"},
+  {
+    "query": "Corrupt the network link by introducing massive packet drops on the interface.",
+    "label": "network-chaos"
+  ,"type": "paraphrase"},
+  {
+    "query": "Perform a man-in-the-middle reroute to serve a dummy HTTP response.",
+    "label": "service-hijacking"
+  ,"type": "paraphrase"},
+  {
+    "query": "Falsify the current date on the worker to test certificate expiry handling.",
+    "label": "time-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Forcefully evict the running replica set of the cache service.",
+    "label": "pod-scenarios"
+  ,"type": "paraphrase"},
+  {
+    "query": "Eradicate the OpenShift CNV instance and monitor its self-healing.",
+    "label": "kubevirt-outage"
+    ,"type": "paraphrase"}
+  
+]

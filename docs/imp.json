@@ -1,0 +1,362 @@
+[
+  {
+    "query": "We need to ensure the CDN properly serves the cached maintenance page when the backend stops accepting external traffic.",
+    "label": "application-outages"
+  ,"type": "implicit"},
+  {
+    "query": "If the underlying daemon executing the database hangs, will the orchestrator detect it and restart it?",
+    "label": "container-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "I want to see if our legacy IIS server recovers when the hypervisor drops its guest instance.",
+    "label": "kubevirt-outage"
+  ,"type": "implicit"},
+  {
+    "query": "Can we test the video streaming buffer by replicating a connection with high packet loss?",
+    "label": "network-chaos"
+  ,"type": "implicit"},
+  {
+    "query": "Let's check if the autoscaler kicks in when a runaway background job pins all the hardware threads.",
+    "label": "node-cpu-hog"
+  ,"type": "implicit"},
+  {
+    "query": "How does the message broker handle a situation where the underlying disk is completely saturated with writes from another tenant?",
+    "label": "node-io-hog"
+  ,"type": "implicit"},
+  {
+    "query": "Will the kernel panic or just kill our app if there is absolutely no free RAM left on the host?",
+    "label": "node-memory-hog"
+  ,"type": "implicit"},
+  {
+    "query": "Ensure the physical host machines reject all incoming administrative connections.",
+    "label": "node-network-filter"
+  ,"type": "implicit"},
+  {
+    "query": "I want to verify the cloud autoscaling group immediately replaces a failed EC2 instance.",
+    "label": "node-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Let's simulate a physical hardware freeze to test our automated IPMI recovery script.",
+    "label": "node-scenarios-bm"
+  ,"type": "implicit"},
+  {
+    "query": "Check if the frontend gracefully degrades when the external third-party API is unreachable.",
+    "label": "pod-network-chaos"
+  ,"type": "implicit"},
+  {
+    "query": "Use host-level iptables to prevent a specific tenant's workload from dialing out to unapproved external IPs.",
+    "label": "pod-network-filter"
+  ,"type": "implicit"},
+  {
+    "query": "Test the resilience of our replica set by simulating random unexpected terminations of the active instances.",
+    "label": "pod-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "We need a full disaster recovery drill where the entire infrastructure suddenly loses electricity.",
+    "label": "power-outages"
+  ,"type": "implicit"},
+  {
+    "query": "What happens if a user uploads a file so large it completely exhausts the backend storage quota?",
+    "label": "pvc-scenario"
+  ,"type": "implicit"},
+  {
+    "query": "Let's test our GitOps pipeline's ability to rebuild a project if the whole namespace is accidentally wiped.",
+    "label": "service-disruption-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "How does the mobile app handle receiving a fake payload from a compromised backend?",
+    "label": "service-hijacking"
+  ,"type": "implicit"},
+  {
+    "query": "Verify the perimeter firewall's capability to drop incomplete TCP handshakes during an attack.",
+    "label": "syn-flood"
+  ,"type": "implicit"},
+  {
+    "query": "Will our financial transactions fail validation if the synchronization daemon completely drifts?",
+    "label": "time-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Test cross-region failover when the primary AWS availability zone loses all connectivity.",
+    "label": "zone-outages"
+  ,"type": "implicit"},
+  {
+    "query": "I want to observe the user experience when the main checkout endpoint becomes completely unreachable.",
+    "label": "application-outages"
+  ,"type": "implicit"},
+  {
+    "query": "We need to ensure that an unhandled SIGKILL to the main application process triggers a container restart.",
+    "label": "container-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Check if our OpenShift virtualized database cluster handles the sudden disappearance of a VM node.",
+    "label": "kubevirt-outage"
+  ,"type": "implicit"},
+  {
+    "query": "Simulate a highly congested WAN link with 100ms jitter to see how our microservices communicate.",
+    "label": "network-chaos"
+  ,"type": "implicit"},
+  {
+    "query": "What happens to the node's readiness status if a crypto-miner malware maximizes all core usage?",
+    "label": "node-cpu-hog"
+  ,"type": "implicit"},
+  {
+    "query": "Let's see if the database read latency spikes when the attached storage is overwhelmed by heavy sequential writes.",
+    "label": "node-io-hog"
+  ,"type": "implicit"},
+  {
+    "query": "Let's see if the Kubernetes scheduler properly evicts pods when the underlying machine's RAM is completely exhausted.",
+    "label": "node-memory-hog"
+  ,"type": "implicit"},
+  {
+    "query": "Let's verify that our microservice retries requests properly when egress traffic is selectively dropped.",
+    "label": "pod-network-chaos"
+  ,"type": "implicit"},
+  {
+    "query": "See if the horizontal pod autoscaler can keep up with a rolling wave of application crashes.",
+    "label": "pod-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "I want to measure the downtime if a rogue script deletes all the routing objects and deployments in our tenant space.",
+    "label": "service-disruption-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Does the cluster monitoring raise a P1 alert if a runaway data pipeline monopolizes the instance's computation cycles?",
+    "label": "node-cpu-hog"
+  ,"type": "implicit"},
+  {
+    "query": "I need to confirm that our database avoids the OOM killer when the OS cache completely drains the available physical memory.",
+    "label": "node-memory-hog"
+  ,"type": "implicit"},
+  {
+    "query": "How will our application behave if the underlying host SSD is bombarded with maximum sequential writes by another process?",
+    "label": "node-io-hog"
+  ,"type": "implicit"},
+  {
+    "query": "Verify that the cloud controller manager successfully detaches volumes from an instance that suddenly goes unreachable.",
+    "label": "node-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Test the IPMI fencing mechanism by simulating a hard physical freeze on a worker.",
+    "label": "node-scenarios-bm"
+  ,"type": "implicit"},
+  {
+    "query": "Can we guarantee that the host-level firewall rules prevent any unauthorized lateral movement at the OS level?",
+    "label": "node-network-filter"
+  ,"type": "implicit"},
+  {
+    "query": "How quickly does the deployment controller spin up replacements when a rolling wave of application panics sweeps through the cluster?",
+    "label": "pod-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Check if the frontend displays a loading skeleton indefinitely when the payment API silently drops packets.",
+    "label": "pod-network-chaos"
+  ,"type": "implicit"},
+  {
+    "query": "I want to prove that this specific tenant's workloads are completely isolated from reaching out to the public internet.",
+    "label": "pod-network-filter"
+  ,"type": "implicit"},
+  {
+    "query": "We need to ensure the liveness probe fails and triggers a restart if the main Java thread locks up inside its isolated environment.",
+    "label": "container-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Observe the behavior of the mobile client when the primary REST endpoints return 504 errors continuously.",
+    "label": "application-outages"
+  ,"type": "implicit"},
+  {
+    "query": "What is the mean time to recovery if an overly permissive CI/CD script accidentally cleans out the entire logical environment?",
+    "label": "service-disruption-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Let's evaluate if our frontend is susceptible to displaying spoofed administrative data from a compromised internal endpoint.",
+    "label": "service-hijacking"
+  ,"type": "implicit"},
+  {
+    "query": "I need to validate that our perimeter defenses can handle a massive influx of incomplete connection requests without tipping over.",
+    "label": "syn-flood"
+  ,"type": "implicit"},
+  {
+    "query": "How does the distributed tracing system behave if the host synchronization agent applies a massive negative offset?",
+    "label": "time-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "We must demonstrate to stakeholders that a complete failure of the eu-central-1a data center won't impact global uptime.",
+    "label": "zone-outages"
+  ,"type": "implicit"},
+  {
+    "query": "Simulate a scenario where the entire cluster goes dark simultaneously due to a catastrophic facility failure.",
+    "label": "power-outages"
+  ,"type": "implicit"},
+  {
+    "query": "Test the behavior of the application when a rogue logging agent fills up every last block on the attached storage.",
+    "label": "pvc-scenario"
+  ,"type": "implicit"},
+  {
+    "query": "Check if the CNV abstraction automatically recreates a legacy Windows VM if the hypervisor loses track of it.",
+    "label": "kubevirt-outage"
+  ,"type": "implicit"},
+  {
+    "query": "I want to see how the Kafka brokers handle a situation where the network connection between them becomes severely degraded and lossy.",
+    "label": "network-chaos"
+  ,"type": "implicit"},
+  {
+    "query": "Test the application's response time when a neighboring container escapes its cgroups and eats all available processor threads.",
+    "label": "node-cpu-hog"
+  ,"type": "implicit"},
+  {
+    "query": "What happens to the node's readiness status when a Java application suffers a massive heap leak?",
+    "label": "node-memory-hog"
+  ,"type": "implicit"},
+  {
+    "query": "Let's see if the database read latency spikes when a background backup job completely saturates the storage bus.",
+    "label": "node-io-hog"
+  ,"type": "implicit"},
+  {
+    "query": "I need to test the autoscaling group's reaction to a virtual machine being forcefully terminated from the cloud console.",
+    "label": "node-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Simulate the panic of the horizontal pod autoscaler when half of the active worker threads vanish.",
+    "label": "pod-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Verify that our microservice retries requests properly when outbound API traffic is selectively restricted.",
+    "label": "pod-network-chaos"
+  ,"type": "implicit"},
+  {
+    "query": "Will our JWT validation logic correctly reject tokens if the server clock accidentally jumps 24 hours into the future?",
+    "label": "time-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "What happens if an unbounded cache directory consumes all the provisioned disk capacity on the backend?",
+    "label": "pvc-scenario"
+  ,"type": "implicit"},
+  {
+    "query": "I want to verify that our external monitoring tool pages the on-call engineer when the main web app stops resolving.",
+    "label": "application-outages"
+  ,"type": "implicit"},
+  {
+    "query": "Test our zero-trust architecture by injecting a malicious proxy that replies with spoofed authorization tokens.",
+    "label": "service-hijacking"
+  ,"type": "implicit"},
+  {
+    "query": "We need to ensure that when a data extraction job writes gigabytes of temp files and hits the disk limit, the system gracefully pauses.",
+    "label": "pvc-scenario"
+  ,"type": "implicit"},
+  {
+    "query": "Verify if the sidecar proxy agent will automatically respawn if it gets stuck in an infinite loop and stops responding to system signals.",
+    "label": "container-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Let's see if the shopping cart microservice can handle losing three of its five replicas unexpectedly during peak Black Friday traffic.",
+    "label": "pod-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "I want to confirm that our external monitoring correctly alerts PagerDuty when the customer-facing portal stops serving pages.",
+    "label": "application-outages"
+  ,"type": "implicit"},
+  {
+    "query": "How does the machine learning inference pipeline degrade if a neighboring container starts monopolizing all the hardware execution threads?",
+    "label": "node-cpu-hog"
+  ,"type": "implicit"},
+  {
+    "query": "Will the critical system daemons survive if a poorly optimized caching service consumes all available physical RAM on the host?",
+    "label": "node-memory-hog"
+  ,"type": "implicit"},
+  {
+    "query": "Check the latency of our search indexing if the underlying block storage is experiencing massive, continuous read and write operations.",
+    "label": "node-io-hog"
+  ,"type": "implicit"},
+  {
+    "query": "I need to ensure the server OS completely ignores any SSH attempts or pings from external IP ranges.",
+    "label": "node-network-filter"
+  ,"type": "implicit"},
+  {
+    "query": "Can we guarantee that this compromised workload is entirely blocked from exfiltrating data to the open internet?",
+    "label": "pod-network-filter"
+  ,"type": "implicit"},
+  {
+    "query": "How does the inventory service behave if the third-party shipping API starts intermittently dropping our requests?",
+    "label": "pod-network-chaos"
+  ,"type": "implicit"},
+  {
+    "query": "Simulate the impact of a degraded transatlantic undersea cable on the host's communication with the European servers.",
+    "label": "network-chaos"
+  ,"type": "implicit"},
+  {
+    "query": "What happens to the validity of our TLS certificates if the host OS thinks it's suddenly the year 2030?",
+    "label": "time-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Test our ingress firewall's ability to survive a massive spike of half-open TCP connections from a malicious botnet.",
+    "label": "syn-flood"
+  ,"type": "implicit"},
+  {
+    "query": "Let's observe the behavior of the dashboard if a man-in-the-middle attack intercepts the backend stream and injects malicious HTML.",
+    "label": "service-hijacking"
+  ,"type": "implicit"},
+  {
+    "query": "I want to test our disaster recovery playbook for when a rogue developer accidentally deletes everything inside the production project.",
+    "label": "service-disruption-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Can our multi-cluster architecture route traffic away successfully if the primary datacenter suffers a total blackout?",
+    "label": "power-outages"
+  ,"type": "implicit"},
+  {
+    "query": "Verify that our database cluster doesn't suffer a split-brain scenario if an entire AWS availability zone gets partitioned from the network.",
+    "label": "zone-outages"
+  ,"type": "implicit"},
+  {
+    "query": "What's the system's reaction when the cloud provider executes a sudden, ungraceful termination of one of our underlying compute instances?",
+    "label": "node-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Test the hardware fencing logic when a physical rack server completely freezes and requires an out-of-band management reboot.",
+    "label": "node-scenarios-bm"
+  ,"type": "implicit"},
+  {
+    "query": "If the OpenShift abstraction layer loses connectivity to the underlying legacy VM, does it automatically attempt to recreate it?",
+    "label": "kubevirt-outage"
+  ,"type": "implicit"},
+  {
+    "query": "Let's see what happens to the logging daemon when it tries to write to a volume that has absolutely zero free space left.",
+    "label": "pvc-scenario"
+  ,"type": "implicit"},
+  {
+    "query": "Does the Kubernetes node change its status to NotReady when an aggressive Java heap leak consumes all physical memory?",
+    "label": "node-memory-hog"
+  ,"type": "implicit"},
+  {
+    "query": "I want to evaluate the CPU throttle limits by forcing a synthetic process to calculate pi infinitely on the node.",
+    "label": "node-cpu-hog"
+  ,"type": "implicit"},
+  {
+    "query": "How quickly will the Horizontal Pod Autoscaler react if random application instances keep dying every two minutes?",
+    "label": "pod-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "Check if the application recovers when the low-level container runtime unexpectedly terminates the main PID.",
+    "label": "container-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "We need to ensure that users get a friendly error page when all ingress traffic to the frontend is abruptly severed.",
+    "label": "application-outages"
+  ,"type": "implicit"},
+  {
+    "query": "Ensure that our load balancers don't crash under the weight of thousands of unacknowledged connection setup requests.",
+    "label": "syn-flood"
+  ,"type": "implicit"},
+  {
+    "query": "Test if our client app validates data schemas by feeding it incorrect, spoofed JSON from a rogue endpoint.",
+    "label": "service-hijacking"
+  ,"type": "implicit"},
+  {
+    "query": "If the master clock is skewed backwards by a month, do our financial ledgers get corrupted?",
+    "label": "time-scenarios"
+  ,"type": "implicit"},
+  {
+    "query": "I want to simulate a severely throttled 3G mobile connection right at the host's ethernet interface.",
+    "label": "network-chaos"
+  ,"type": "implicit"}
+]

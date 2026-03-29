@@ -1,0 +1,363 @@
+[
+  {
+    "query": "Replicate a scenario where the main breaker in the datacenter trips unexpectedly.",
+    "label": "power-outages"
+  ,"type": "lexical"},
+  {
+    "query": "Simulate a runaway infinite loop bug in a background worker script.",
+    "label": "node-cpu-hog"
+  ,"type": "lexical"},
+  {
+    "query": "Verify if our expiring SSL certificates will trigger the correct alerting thresholds.",
+    "label": "time-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Trigger the disaster recovery failover routing away from the primary geographical region.",
+    "label": "zone-outages"
+  ,"type": "lexical"},
+  {
+    "query": "See how the frontend handles receiving a malicious payload from what it thinks is the trusted backend.",
+    "label": "service-hijacking"
+  ,"type": "lexical"},
+  {
+    "query": "What happens when the database log rotation fails to run for a week?",
+    "label": "pvc-scenario"
+  ,"type": "lexical"},
+  {
+    "query": "Test our mitigation rules against a botnet trying to exhaust our connection tracking table.",
+    "label": "syn-flood"
+  ,"type": "lexical"},
+  {
+    "query": "Replicate the conditions of a user accessing the platform from a spotty 3G cellular connection.",
+    "label": "network-chaos"
+  ,"type": "lexical"},
+  {
+    "query": "Ensure our monitoring dashboards light up when users get 502 Bad Gateway errors on the main domain.",
+    "label": "application-outages"
+  ,"type": "lexical"},
+  {
+    "query": "Determine if the Kubernetes scheduler properly spins up new replicas when random workloads suddenly disappear.",
+    "label": "pod-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Test the cloud auto-scaling group's ability to replace a dead EC2 instance.",
+    "label": "node-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "How does the platform react if an entire logical grouping of microservices is suddenly uninstalled?",
+    "label": "service-disruption-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "See if the Linux OOM killer targets the correct rogue processes during severe resource starvation.",
+    "label": "node-memory-hog"
+  ,"type": "lexical"},
+  {
+    "query": "Create an artificial bottleneck on the storage bus to see how disk-heavy batch jobs degrade.",
+    "label": "node-io-hog"
+  ,"type": "lexical"},
+  {
+    "query": "Verify our bare-metal provisioning pipeline can recover a machine after a sudden physical hardware freeze.",
+    "label": "node-scenarios-bm"
+  ,"type": "lexical"},
+  {
+    "query": "Check if the kubelet successfully restarts the underlying process when it receives a segmentation fault.",
+    "label": "container-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Validate the self-healing behavior of legacy monoliths running on our containerized hypervisor when their underlying VM vanishes.",
+    "label": "kubevirt-outage"
+  ,"type": "lexical"},
+  {
+    "query": "Prevent this specific microservice from reaching the external payment gateway to test fallback logic.",
+    "label": "pod-network-chaos"
+  ,"type": "lexical"},
+  {
+    "query": "Ensure that the backend workload rejects any incoming traffic on its management interface port.",
+    "label": "pod-network-filter"
+  ,"type": "lexical"},
+  {
+    "query": "Lock down the underlying host so it refuses all SSH and HTTP traffic at the OS layer.",
+    "label": "node-network-filter"
+  ,"type": "lexical"},
+  {
+    "query": "Find out if our distributed tracing timestamps get corrupted when NTP sync is lost.",
+    "label": "time-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Evaluate if our load balancers can survive thousands of incomplete TCP handshakes per second.",
+    "label": "syn-flood"
+  ,"type": "lexical"},
+  {
+    "query": "Check the application's behavior when it receives a 'No space left on device' error from the OS.",
+    "label": "pvc-scenario"
+  ,"type": "lexical"},
+  {
+    "query": "Replicate the impact of a crypto-mining malware infecting one of the worker machines.",
+    "label": "node-cpu-hog"
+  ,"type": "lexical"},
+  {
+    "query": "Simulate a fiber cut that isolates our primary AWS availability zone from the internet.",
+    "label": "zone-outages"
+  ,"type": "lexical"},
+  {
+    "query": "See how the Kafka message queue handles severe jitter and dropped packets between brokers.",
+    "label": "network-chaos"
+  ,"type": "lexical"},
+  {
+    "query": "Test if our microservices properly validate JWTs when a compromised internal service returns spoofed authentication tokens.",
+    "label": "service-hijacking"
+  ,"type": "lexical"},
+  {
+    "query": "Simulate the panic of the horizontal pod autoscaler when half of the fleet unexpectedly dies.",
+    "label": "pod-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Find out if the persistent volumes automatically re-attach correctly after the entire cluster loses electricity.",
+    "label": "power-outages"
+  ,"type": "lexical"},
+  {
+    "query": "Simulate a scenario where the primary ingress controller stops routing external traffic to the specified backend.",
+    "label": "application-outages"
+  ,"type": "lexical"},
+  {
+    "query": "A rogue Java process with a massive heap leak starts thrashing the host.",
+    "label": "node-memory-hog"
+  ,"type": "lexical"},
+  {
+    "query": "Check if the scheduled nightly backups trigger at the wrong hour due to a daylight savings bug.",
+    "label": "time-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Determine if the perimeter firewall drops traffic when malicious actors spam initiation packets without ACKs.",
+    "label": "syn-flood"
+  ,"type": "lexical"},
+  {
+    "query": "What happens when our fluentd log aggregator writes too many uncompressed logs to the mount?",
+    "label": "pvc-scenario"
+  ,"type": "lexical"},
+  {
+    "query": "Simulate an ungraceful crash of the entire AWS region bringing down every single instance.",
+    "label": "power-outages"
+  ,"type": "lexical"},
+  {
+    "query": "Test the cross-region replication lag when the primary us-west datacenter gets isolated from the internet.",
+    "label": "zone-outages"
+  ,"type": "lexical"},
+  {
+    "query": "Observe the auto-recreation of custom resources when an administrator accidentally runs a delete-all command on the monitoring project.",
+    "label": "service-disruption-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Simulate the OOMKilled state where random individual microservices are terminated by the orchestration layer.",
+    "label": "pod-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Replicate the storage latency caused by a noisy neighbor running massive database dumps on the same physical SAN.",
+    "label": "node-io-hog"
+  ,"type": "lexical"},
+  {
+    "query": "Test application responsiveness when a misconfigured ML training job pins all the host threads to 100%.",
+    "label": "node-cpu-hog"
+  ,"type": "lexical"},
+  {
+    "query": "See how long it takes for the cluster to notice a worker machine in GCP was preempted or terminated.",
+    "label": "node-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Verify the PXE boot sequence works correctly after a physical blade server loses and regains power.",
+    "label": "node-scenarios-bm"
+  ,"type": "lexical"},
+  {
+    "query": "What is the recovery time when the core application binary segfaults inside its isolated runtime?",
+    "label": "container-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Evaluate the downtime of a legacy Windows Server workload when its underlying OpenShift CNV abstraction is destroyed.",
+    "label": "kubevirt-outage"
+  ,"type": "lexical"},
+  {
+    "query": "Ensure the load balancer returns a 503 custom error page when the backend API routes are completely inaccessible.",
+    "label": "application-outages"
+  ,"type": "lexical"},
+  {
+    "query": "Test our zero-trust architecture by injecting a malicious proxy that replies with spoofed authorization tokens.",
+    "label": "service-hijacking"
+  ,"type": "lexical"},
+  {
+    "query": "Simulate a severely congested cross-country WAN link by adding 200 milliseconds of round-trip time.",
+    "label": "network-chaos"
+  ,"type": "lexical"},
+  {
+    "query": "Find out if the frontend times out gracefully when it cannot reach the payment gateway API due to routing restrictions.",
+    "label": "pod-network-chaos"
+  ,"type": "lexical"},
+  {
+    "query": "Verify that the underlying worker machine drops all management SSH attempts before they hit the auth daemon.",
+    "label": "node-network-filter"
+  ,"type": "lexical"},
+  {
+    "query": "Ensure that a compromised web frontend cannot establish unauthorized outbound reverse shells.",
+    "label": "pod-network-filter"
+  ,"type": "lexical"},
+  {
+    "query": "Simulate an application crash caused by the mounted block storage hitting zero available inodes.",
+    "label": "pvc-scenario"
+  ,"type": "lexical"},
+  {
+    "query": "Find out if our financial transaction logs get out of order if the master server's clock drifts backward.",
+    "label": "time-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Replicate a scenario where caching aggressive redis instances starve the OS kernel of page cache.",
+    "label": "node-memory-hog"
+  ,"type": "lexical"},
+  {
+    "query": "Evaluate the cold-start time of the entire infrastructure after a catastrophic grid failure.",
+    "label": "power-outages"
+  ,"type": "lexical"},
+  {
+    "query": "Simulate a major BGP route leak that blackholes all traffic to and from our secondary cloud region.",
+    "label": "zone-outages"
+  ,"type": "lexical"},
+  {
+    "query": "Wipe clean the entire logical partition containing our staging environment to test CI/CD recreation pipelines.",
+    "label": "service-disruption-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Can our ingress controllers withstand a barrage of half-open connections originating from spoofed IPs?",
+    "label": "syn-flood"
+  ,"type": "lexical"},
+  {
+    "query": "Check if the mobile app falls back to offline mode when the primary REST endpoints stop resolving.",
+    "label": "application-outages"
+  ,"type": "lexical"},
+  {
+    "query": "Measure how fast the replica set scales back up when half of the active worker threads suddenly vanish.",
+    "label": "pod-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Test the automated recovery of a virtualized SQL server when the hypervisor orchestrator loses track of it.",
+    "label": "kubevirt-outage"
+  ,"type": "lexical"},
+  {
+    "query": "We need to prove to the auditors that our disaster recovery plan actually works if the entire physical datacenter goes offline.",
+    "label": "power-outages"
+  ,"type": "lexical"},
+  {
+    "query": "How does the monitoring dashboard react when a server gets stuck processing a massive backlog of unoptimized video renders?",
+    "label": "node-cpu-hog"
+  ,"type": "lexical"},
+  {
+    "query": "Are our DDoS mitigation appliances configured correctly to handle massive malicious traffic spikes at the perimeter?",
+    "label": "syn-flood"
+  ,"type": "lexical"},
+  {
+    "query": "Can the legacy Windows application survive if the virtualization layer beneath it unexpectedly vanishes?",
+    "label": "kubevirt-outage"
+  ,"type": "lexical"},
+  {
+    "query": "I want to test the log rotation alerting. What happens if a log file grows infinitely and consumes all available space?",
+    "label": "pvc-scenario"
+  ,"type": "lexical"},
+  {
+    "query": "What is the blast radius to our active users if an entire AWS region drops off the map?",
+    "label": "zone-outages"
+  ,"type": "lexical"},
+  {
+    "query": "I need to ensure our microservices don't blindly trust internal traffic if a bad actor compromises an endpoint and serves fake data.",
+    "label": "service-hijacking"
+  ,"type": "lexical"},
+  {
+    "query": "Will our financial transactions fail validation if a server's synchronization daemon completely drifts?",
+    "label": "time-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Let's test the hardware provisioning script by simulating someone yanking the power cord on the physical rack.",
+    "label": "node-scenarios-bm"
+  ,"type": "lexical"},
+  {
+    "query": "I need to simulate a user connecting to the platform from a moving train with a terrible cellular signal.",
+    "label": "network-chaos"
+  ,"type": "lexical"},
+  {
+    "query": "Can we verify if a strict firewall lockdown at the host OS level properly shields the underlying services?",
+    "label": "node-network-filter"
+  ,"type": "lexical"},
+  {
+    "query": "What happens when the core Java process crashes but the orchestration layer thinks the pod is still healthy?",
+    "label": "container-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "We need to verify that our GitOps pipeline can rebuild the entire staging environment from scratch if someone accidentally drops it.",
+    "label": "service-disruption-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Let's see what the customer sees when the main checkout page suddenly starts returning timeouts and 503s.",
+    "label": "application-outages"
+  ,"type": "lexical"},
+  {
+    "query": "I suspect a severe memory leak in the new release; let's simulate the host running completely dry to see what gets killed first.",
+    "label": "node-memory-hog"
+  ,"type": "lexical"},
+  {
+    "query": "How does the database perform when the underlying SAN is being hammered by other noisy tenants?",
+    "label": "node-io-hog"
+  ,"type": "lexical"},
+  {
+    "query": "How well does the platform handle unexpected scale-down events caused by random kernel panics in the fleet?",
+    "label": "pod-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "Ensure the backend database rejects unauthorized connections from non-whitelisted workloads sharing the same cluster.",
+    "label": "pod-network-filter"
+  ,"type": "lexical"},
+  {
+    "query": "What is the impact on the message queue if its consumers suddenly lose their routing to the internet?",
+    "label": "pod-network-chaos"
+  ,"type": "lexical"},
+  {
+    "query": "Let's verify the cloud provider's auto-healing features by forcing a worker node into a terminated state.",
+    "label": "node-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "What happens if a user uploads a file so large it completely maxes out the assigned storage quota on the backend?",
+    "label": "pvc-scenario"
+  ,"type": "lexical"},
+  {
+    "query": "We need to verify if upcoming daylight savings time changes will break our distributed cronjob scheduling.",
+    "label": "time-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "I want to verify if our ingress controller will tip over during a massive botnet connection attempt.",
+    "label": "syn-flood"
+  ,"type": "lexical"},
+  {
+    "query": "How does the system prioritize which processes to kill when the entire server starts swapping heavily?",
+    "label": "node-memory-hog"
+  ,"type": "lexical"},
+  {
+    "query": "Can our multi-region active-active setup seamlessly handle the loss of the us-east-1 routing?",
+    "label": "zone-outages"
+  ,"type": "lexical"},
+  {
+    "query": "We need to test how our frontend handles receiving malicious JSON payloads from what it thinks is the trusted backend API.",
+    "label": "service-hijacking"
+  ,"type": "lexical"},
+  {
+    "query": "Simulate a scenario where the primary cloud provider pulls the plug on our entire account without warning.",
+    "label": "power-outages"
+  ,"type": "lexical"},
+  {
+    "query": "Test the application's read/write timeouts when the underlying storage throughput becomes severely degraded.",
+    "label": "node-io-hog"
+  ,"type": "lexical"},
+  {
+    "query": "Let's test the kubelet's liveness probes by simulating a hung main process inside the wrapper.",
+    "label": "container-scenarios"
+  ,"type": "lexical"},
+  {
+    "query": "We need to test the automated failover of our virtualized databases running on top of OpenShift.",
+    "label": "kubevirt-outage"
+    ,"type": "lexical"
+  }
+]

@@ -1,0 +1,6 @@
+id,input,label,top1_predicted,top1_score,correct_score,expected_rank,type
+0,Block all egress traffic with telemetry and alert checks,network-chaos,node-network-filter,-5.4289,-5.4289,3,default
+2,Execute the scenario in monitoring namespace with a 120-second timeout and 1 iteration,kubevirt-outage,network-chaos,-7.4985,,not_retrieved,default
+12,Run service disruption targeting pods labeled app=frontend,service-disruption-scenarios,pod-scenarios,-6.1132,-6.1132,5,default
+15,We're running a container chaos scenario in the kube-system namespace targeting label app=kubelet.,container-scenarios,pod-scenarios,-8.4952,-8.4952,4,default
+16,Testing container failures in the kube-system namespace using label selector app=etcd.,container-scenarios,pod-scenarios,-7.0707,,not_retrieved,default

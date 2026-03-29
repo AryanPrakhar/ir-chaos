@@ -1,0 +1,1 @@
+{"timestamp": "2026-03-29T16:50:55.705902", "retriever_model": "Qwen/Qwen3-Embedding-0.6B", "cross_encoder_model": "BAAI/bge-reranker-base", "total_queries": 20, "top1_accuracy": 0.75, "top1_count": 15, "topk_accuracy": 0.9, "topk_count": 18, "mrr": 0.7891666666666667, "avg_latency_ms": 793.634236199432, "top_k": 5}
