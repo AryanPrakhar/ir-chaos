@@ -23,7 +23,6 @@ HF_CACHE_DIR="${HF_CACHE_DIR:-$ROOT_DIR/.cache/huggingface}"
 TORCH_CACHE_DIR="${TORCH_CACHE_DIR:-$ROOT_DIR/.cache/torch}"
 
 
-# Recommended small-but-strong local model for llama.cpp inference.
 DEFAULT_MODEL_PATH="$ROOT_DIR/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf"
 MODEL_PATH="${2:-${LLM_MODEL_PATH:-$DEFAULT_MODEL_PATH}}"
 
@@ -48,7 +47,10 @@ else
 fi
 
 echo "[2/5] Ensuring inference image exists"
-if podman image exists krkn-inference:v1; then
+if [[ "${FORCE_REBUILD_INFERENCE:-0}" == "1" ]]; then
+  echo "FORCE_REBUILD_INFERENCE=1 set, rebuilding krkn-inference:v1"
+  podman build -t krkn-inference:v1 -f "$ROOT_DIR/inference/Dockerfile" "$ROOT_DIR"
+elif podman image exists krkn-inference:v1; then
   echo "Image krkn-inference:v1 already present, skipping build"
 else
   podman build -t krkn-inference:v1 -f "$ROOT_DIR/inference/Dockerfile" "$ROOT_DIR"
