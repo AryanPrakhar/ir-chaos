@@ -46,15 +46,26 @@ log_timing() {
 # Recommended small-but-strong local model for llama.cpp inference.
 DEFAULT_MODEL_PATH="$ROOT_DIR/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf"
 MODEL_PATH="${2:-${LLM_MODEL_PATH:-$DEFAULT_MODEL_PATH}}"
+SKIP_INFERENCE="${SKIP_INFERENCE:-}"
 
+MODEL_AVAILABLE="true"
 if [[ ! -f "$MODEL_PATH" ]]; then
-  echo "Model file not found: $MODEL_PATH"
-  echo "Pass a model path as arg2 or set LLM_MODEL_PATH."
-  exit 1
+  if [[ -z "$SKIP_INFERENCE" ]]; then
+    echo "Model file not found: $MODEL_PATH"
+    echo "Pass a model path as arg2 or set LLM_MODEL_PATH, or set SKIP_INFERENCE=1 for retrieval-only test mode."
+    exit 1
+  fi
+  MODEL_AVAILABLE="false"
+  echo "WARNING: Model not found, running in retrieval-only test mode."
 fi
 
-MODEL_DIR="$(dirname "$MODEL_PATH")"
-MODEL_FILE="$(basename "$MODEL_PATH")"
+if [[ "$MODEL_AVAILABLE" == "true" ]]; then
+  MODEL_DIR="$(dirname "$MODEL_PATH")"
+  MODEL_FILE="$(basename "$MODEL_PATH")"
+else
+  MODEL_DIR=""
+  MODEL_FILE=""
+fi
 
 mkdir -p "$SHARED_DIR"
 
@@ -70,13 +81,19 @@ fi
 log_timing "[timing] retrieval_image_step_seconds=$(( $(now_epoch) - STEP_START_EPOCH ))"
 
 echo "[2/5] Ensuring inference image exists"
-STEP_START_EPOCH="$(now_epoch)"
-if podman image exists "$INFERENCE_IMAGE"; then
-  echo "Image $INFERENCE_IMAGE already present, skipping build"
+if [[ "$MODEL_AVAILABLE" == "false" ]]; then
+  echo "Skipping inference image (test mode - no model)"
+  STEP_START_EPOCH="$(now_epoch)"
+  log_timing "[timing] inference_image_step_seconds=0 (skipped_test_mode=true)"
 else
-  podman build -t "$INFERENCE_IMAGE" -f "$ROOT_DIR/inference/Dockerfile" "$ROOT_DIR"
+  STEP_START_EPOCH="$(now_epoch)"
+  if podman image exists "$INFERENCE_IMAGE"; then
+    echo "Image $INFERENCE_IMAGE already present, skipping build"
+  else
+    podman build -t "$INFERENCE_IMAGE" -f "$ROOT_DIR/inference/Dockerfile" "$ROOT_DIR"
+  fi
+  log_timing "[timing] inference_image_step_seconds=$(( $(now_epoch) - STEP_START_EPOCH ))"
 fi
-log_timing "[timing] inference_image_step_seconds=$(( $(now_epoch) - STEP_START_EPOCH ))"
 
 echo "[3/5] Ensuring index exists (build once unless missing)"
 STEP_START_EPOCH="$(now_epoch)"
@@ -108,34 +125,39 @@ podman run --rm \
 log_timing "[timing] retrieval_step_seconds=$(( $(now_epoch) - STEP_START_EPOCH ))"
 
 echo "[5/5] Running inference with retrieval output"
-STEP_START_EPOCH="$(now_epoch)"
-INFERENCE_RUN_ARGS=()
-if [[ -n "$INFERENCE_PODMAN_DEVICE" ]]; then
-  INFERENCE_RUN_ARGS+=(--device "$INFERENCE_PODMAN_DEVICE")
-fi
-if [[ -n "$INFERENCE_PODMAN_SECURITY_OPT" ]]; then
-  INFERENCE_RUN_ARGS+=(--security-opt "$INFERENCE_PODMAN_SECURITY_OPT")
-fi
-if [[ -n "$INFERENCE_GPU_MODE" ]]; then
-  INFERENCE_RUN_ARGS+=(-e "GPU_MODE=$INFERENCE_GPU_MODE")
-fi
+if [[ "$MODEL_AVAILABLE" == "false" ]]; then
+  echo "Skipping inference (test mode - no model)"
+  log_timing "[timing] inference_step_seconds=0 (skipped_test_mode=true)"
+else
+  STEP_START_EPOCH="$(now_epoch)"
+  INFERENCE_RUN_ARGS=()
+  if [[ -n "$INFERENCE_PODMAN_DEVICE" ]]; then
+    INFERENCE_RUN_ARGS+=(--device "$INFERENCE_PODMAN_DEVICE")
+  fi
+  if [[ -n "$INFERENCE_PODMAN_SECURITY_OPT" ]]; then
+    INFERENCE_RUN_ARGS+=(--security-opt "$INFERENCE_PODMAN_SECURITY_OPT")
+  fi
+  if [[ -n "$INFERENCE_GPU_MODE" ]]; then
+    INFERENCE_RUN_ARGS+=(-e "GPU_MODE=$INFERENCE_GPU_MODE")
+  fi
 
-podman run --rm \
-  "${INFERENCE_RUN_ARGS[@]}" \
-  -v "$SHARED_DIR:/io:Z" \
-  -v "$MODEL_DIR:/models:Z" \
-  "$INFERENCE_IMAGE" \
-  python3 /app/run_inference.py \
-    --input /io/retrieval_output.json \
-    --output /io/inference_output.json \
-    --model "/models/$MODEL_FILE"
-log_timing "[timing] inference_step_seconds=$(( $(now_epoch) - STEP_START_EPOCH ))"
+  podman run --rm \
+    "${INFERENCE_RUN_ARGS[@]}" \
+    -v "$SHARED_DIR:/io:Z" \
+    -v "$MODEL_DIR:/models:Z" \
+    "$INFERENCE_IMAGE" \
+    python3 /app/run_inference.py \
+      --input /io/retrieval_output.json \
+      --output /io/inference_output.json \
+      --model "/models/$MODEL_FILE"
+  log_timing "[timing] inference_step_seconds=$(( $(now_epoch) - STEP_START_EPOCH ))"
 
-if [[ -f "$SHARED_DIR/inference_output.json" ]]; then
-  GPU_MODE_VALUE="$(grep -m1 '"gpu_mode"' "$SHARED_DIR/inference_output.json" | sed -E 's/.*: "([^"]+)".*/\1/' || true)"
-  GPU_LAYERS_VALUE="$(grep -m1 '"n_gpu_layers"' "$SHARED_DIR/inference_output.json" | sed -E 's/.*: ([0-9-]+).*/\1/' || true)"
-  if [[ -n "$GPU_MODE_VALUE" ]]; then
-    log_timing "[acceleration] gpu_mode=$GPU_MODE_VALUE n_gpu_layers=${GPU_LAYERS_VALUE:-unknown}"
+  if [[ -f "$SHARED_DIR/inference_output.json" ]]; then
+    GPU_MODE_VALUE="$(grep -m1 '"gpu_mode"' "$SHARED_DIR/inference_output.json" | sed -E 's/.*: "([^"]+)".*/\1/' || true)"
+    GPU_LAYERS_VALUE="$(grep -m1 '"n_gpu_layers"' "$SHARED_DIR/inference_output.json" | sed -E 's/.*: ([0-9-]+).*/\1/' || true)"
+    if [[ -n "$GPU_MODE_VALUE" ]]; then
+      log_timing "[acceleration] gpu_mode=$GPU_MODE_VALUE n_gpu_layers=${GPU_LAYERS_VALUE:-unknown}"
+    fi
   fi
 fi
 
@@ -143,5 +165,9 @@ log_timing "[timing] total_pipeline_seconds=$(( $(now_epoch) - RUN_START_EPOCH )
 
 echo "Done. Files written:"
 echo "  $SHARED_DIR/retrieval_output.json"
-echo "  $SHARED_DIR/inference_output.json"
-echo "Model used: $MODEL_PATH"
+if [[ "$MODEL_AVAILABLE" == "true" ]]; then
+  echo "  $SHARED_DIR/inference_output.json"
+  echo "Model used: $MODEL_PATH"
+else
+  echo "(Inference skipped - test mode)"
+fi
