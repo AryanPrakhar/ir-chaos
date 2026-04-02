@@ -142,16 +142,18 @@ brew tap slp/krunkit
 brew install krunkit
 ```
 
-5. Replace vfkit with krunkit (temporary workaround from upstream flow).
+5. **KNOWN ISSUE: Podman 5.8 + krunkit 1.1.1 incompatibility**
+   - Podman 5.8's applehv provider injects `--device rosetta` into vfkit args
+   - krunkit 1.1.1 CLI does not accept rosetta device flag → vfkit exits with error
+   - **Workaround**: Use default applehv/vfkit (no krunkit swap), or downgrade Podman to 5.7
+   - If machine won't start with "vfkit error code 2", try:
+     ```bash
+     podman machine stop podman-machine-default
+     podman machine rm -f podman-machine-default
+     podman machine init
+     ```
 
-```bash
-PODMAN_LIBEXEC="$(brew --prefix podman)/libexec/podman"
-cd "$PODMAN_LIBEXEC"
-mv vfkit vfkit.bak
-ln -s "$(brew --prefix)/bin/krunkit" vfkit
-```
-
-6. Start VM and verify render node exists:
+6. START VM (without krunkit swap for now, given Podman 5.8 compatibility issues):
 
 ```bash
 podman machine start
@@ -159,7 +161,7 @@ podman machine ssh
 ls /dev/dri
 ```
 
-If `renderD128` is present, Vulkan path should be available.
+If `renderD128` is present, Vulkan path should be available. If machine fails to start, see **Known Issue** above.
 
 ## Local dev on Linux + remote test on macOS
 
