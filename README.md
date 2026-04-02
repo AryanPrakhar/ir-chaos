@@ -1,6 +1,6 @@
 # Krkn Retriever
 
-Two-stage retrieval (embedding search + cross-encoder reranking) over Krkn scenario docs. This repository indexes Markdown docs under the top-level `docs/` directory and serves fast, high-quality matches for scenario queries.
+Two-stage retrieval (embedding search + cross-encoder reranking) over Krkn scenario docs. This repository indexes Markdown docs under the top-level `docs` directory and serves fast, high-quality matches for scenario queries.
 
 ## What this repo uses
 
@@ -14,7 +14,7 @@ Two-stage retrieval (embedding search + cross-encoder reranking) over Krkn scena
 
 - Retrieval container: builds index and returns top-matching scenarios.
 - Inference container: runs local LLM generation from retrieval export JSON.
-- Handoff format: retrieval writes a JSON file, inference reads it and writes a response JSON.
+- Handoff format: retrieval writes JSON, inference reads it and writes response JSON.
 
 ## Build images
 
@@ -27,8 +27,8 @@ podman build -t krkn-inference:v1 -f inference/Dockerfile .
 
 ## Retrieval quick start
 
-```
-podman run -it --rm \                                                                               
+```bash
+podman run -it --rm \
   -v ./krkn-retriever:/app:Z \
   -v ./docs:/app/docs:Z \
   -v ./krkn-retriever/outputs:/outputs:Z \
@@ -69,16 +69,9 @@ podman run --rm \
     --model /models/your-model.gguf
 ```
 
-## End-to-end (recommended)
+## End-to-end pipeline
 
-Use the provided script to run retrieval -> export -> inference in one command.
-
-Pipeline behavior:
-
-- Reuses existing images (builds only if missing).
-- Uses existing FAISS index if present.
-- Builds index automatically only when missing.
-- Runs retrieval and inference for each query.
+Use the helper script to run retrieval -> export -> inference in one command.
 
 Run with explicit model path:
 
@@ -104,21 +97,20 @@ You can also set:
 export LLM_MODEL_PATH=/absolute/path/to/your-model.gguf
 ```
 
-Then run query-only:
+### Optional inference runtime controls
+
+- `INFERENCE_IMAGE`: inference image tag (default: `krkn-inference:v1`)
+- `INFERENCE_GPU_MODE`: force `cpu`, `vulkan`, or `nvidia`
+- `INFERENCE_PODMAN_DEVICE`: add `--device` for inference container
+- `INFERENCE_PODMAN_SECURITY_OPT`: add `--security-opt` for inference container
+
+Example Vulkan run:
 
 ```bash
-./scripts/pipeline_retrieve_infer.sh "Generate a chaos validation plan for network packet loss"
+export INFERENCE_GPU_MODE=vulkan
+export INFERENCE_PODMAN_DEVICE=/dev/dri/renderD128
+./scripts/pipeline_retrieve_infer.sh "Generate a node network chaos plan"
 ```
-
-## Inference LLM
-
-Inference uses llama.cpp through `llama-cpp-python` in the inference container.
-
-Model choice:
-
-- Recommended small, strong model: Qwen2.5-3B-Instruct GGUF, quantized as Q4_K_M.
-- By default the pipeline looks for: `./models/Qwen2.5-3B-Instruct-Q4_K_M.gguf`.
-- You can pass any GGUF model path to the script if you want a different model.
 
 Outputs are written to:
 
@@ -129,7 +121,7 @@ Outputs are written to:
 
 For Vulkan-capable GPU inference inside Podman VM on macOS, follow the applehv + krunkit setup:
 
-1. Install/upgrade Podman from brew.
+1. Install or upgrade Podman from brew.
 2. Set machine provider to `applehv` in `~/.config/containers/containers.conf`:
 
 ```toml
@@ -150,7 +142,15 @@ brew tap slp/krunkit
 brew install krunkit
 ```
 
-5. Replace vfkit with krunkit (temporary workaround used by the upstream blog flow).
+5. Replace vfkit with krunkit (temporary workaround from upstream flow).
+
+```bash
+PODMAN_LIBEXEC="$(brew --prefix podman)/libexec/podman"
+cd "$PODMAN_LIBEXEC"
+mv vfkit vfkit.bak
+ln -s "$(brew --prefix)/bin/krunkit" vfkit
+```
+
 6. Start VM and verify render node exists:
 
 ```bash
@@ -159,11 +159,36 @@ podman machine ssh
 ls /dev/dri
 ```
 
-If `renderD128` is present, the inference container can use Vulkan path (`GPU_MODE=vulkan`).
+If `renderD128` is present, Vulkan path should be available.
+
+## Local dev on Linux + remote test on macOS
+
+Develop on local machine, push the `vulkan` branch, and test remotely by fetching latest changes.
+
+Local workflow:
+
+```bash
+git checkout vulkan
+git add -A
+git commit -m "Update Vulkan flow"
+git push origin vulkan
+```
+
+Remote macOS workflow:
+
+```bash
+cd ~/dev/ir-chaos
+git fetch origin
+git checkout vulkan || git checkout -b vulkan origin/vulkan
+git pull --ff-only origin vulkan
+./scripts/pipeline_retrieve_infer.sh "Test query" /absolute/path/to/model.gguf
+```
+
+This keeps remote testing synced with latest local branch changes while code changes happen on local Linux.
 
 ## Linux/PC fallback
 
-If no Vulkan GPU is available, inference still runs in CPU mode automatically (`n_gpu_layers=0`). No command changes are required.
+If no Vulkan GPU is available, inference still runs in CPU mode automatically (`n_gpu_layers=0`).
 
 ## Benchmark
 

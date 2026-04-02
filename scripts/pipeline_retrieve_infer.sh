@@ -20,6 +20,16 @@ SHARED_DIR="$ROOT_DIR/shared"
 INDEX_FILE="$ROOT_DIR/krkn-retriever/faiss-index/krkn-scenarios.index"
 META_FILE="$ROOT_DIR/krkn-retriever/faiss-index/krkn-scenarios.meta"
 
+# Optional runtime knobs for inference container.
+# Examples:
+#   export INFERENCE_GPU_MODE=vulkan
+#   export INFERENCE_PODMAN_DEVICE=/dev/dri/renderD128
+#   export INFERENCE_PODMAN_SECURITY_OPT=label=disable
+INFERENCE_IMAGE="${INFERENCE_IMAGE:-krkn-inference:v1}"
+INFERENCE_GPU_MODE="${INFERENCE_GPU_MODE:-}"
+INFERENCE_PODMAN_DEVICE="${INFERENCE_PODMAN_DEVICE:-}"
+INFERENCE_PODMAN_SECURITY_OPT="${INFERENCE_PODMAN_SECURITY_OPT:-}"
+
 # Recommended small-but-strong local model for llama.cpp inference.
 DEFAULT_MODEL_PATH="$ROOT_DIR/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf"
 MODEL_PATH="${2:-${LLM_MODEL_PATH:-$DEFAULT_MODEL_PATH}}"
@@ -43,10 +53,10 @@ else
 fi
 
 echo "[2/5] Ensuring inference image exists"
-if podman image exists krkn-inference:v1; then
-  echo "Image krkn-inference:v1 already present, skipping build"
+if podman image exists "$INFERENCE_IMAGE"; then
+  echo "Image $INFERENCE_IMAGE already present, skipping build"
 else
-  podman build -t krkn-inference:v1 -f "$ROOT_DIR/inference/Dockerfile" "$ROOT_DIR"
+  podman build -t "$INFERENCE_IMAGE" -f "$ROOT_DIR/inference/Dockerfile" "$ROOT_DIR"
 fi
 
 echo "[3/5] Ensuring index exists (build once unless missing)"
@@ -74,10 +84,22 @@ podman run --rm \
   python3 retriever.py query "$QUERY" --retrieve-k 10 --rerank-k 5 --export /io/retrieval_output.json --include-text
 
 echo "[5/5] Running inference with retrieval output"
+INFERENCE_RUN_ARGS=()
+if [[ -n "$INFERENCE_PODMAN_DEVICE" ]]; then
+  INFERENCE_RUN_ARGS+=(--device "$INFERENCE_PODMAN_DEVICE")
+fi
+if [[ -n "$INFERENCE_PODMAN_SECURITY_OPT" ]]; then
+  INFERENCE_RUN_ARGS+=(--security-opt "$INFERENCE_PODMAN_SECURITY_OPT")
+fi
+if [[ -n "$INFERENCE_GPU_MODE" ]]; then
+  INFERENCE_RUN_ARGS+=(-e "GPU_MODE=$INFERENCE_GPU_MODE")
+fi
+
 podman run --rm \
+  "${INFERENCE_RUN_ARGS[@]}" \
   -v "$SHARED_DIR:/io:Z" \
   -v "$MODEL_DIR:/models:Z" \
-  krkn-inference:v1 \
+  "$INFERENCE_IMAGE" \
   python3 /app/run_inference.py \
     --input /io/retrieval_output.json \
     --output /io/inference_output.json \

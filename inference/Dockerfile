@@ -52,6 +52,14 @@ RUN printf '%s\n' \
 '#!/usr/bin/env bash' \
 'set -e' \
 '' \
+'if [[ -n "${GPU_MODE:-}" ]]; then' \
+'    if [[ "$GPU_MODE" == "nvidia" ]]; then' \
+'        export VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_egl_icd.json' \
+'    fi' \
+'    echo "[entrypoint] GPU_MODE preset: $GPU_MODE"' \
+'    exec "$@"' \
+'fi' \
+'' \
 'GPU_MODE="cpu"' \
 'VINFO="$(vulkaninfo --summary 2>/dev/null || true)"' \
 'if echo "$VINFO" | grep -q "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU"; then' \
