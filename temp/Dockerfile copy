@@ -4,12 +4,9 @@ ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV PATH=/opt/venv/bin:$PATH
 
-ARG NVIDIA_EGL_ICD=0
-ARG VK_DRIVER_FILES=
-
 # ------------------------------------------------------------
 # MANDATORY RUNTIME SECTION
-# Vulkan + Python runtime only
+# Everything above the debug line is required for Vulkan runtime
 # ------------------------------------------------------------
 
 RUN dnf -y update && \
@@ -28,50 +25,70 @@ RUN dnf -y update && \
       vulkan-loader \
       vulkan-loader-devel \
       vulkan-headers \
-            mesa-vulkan-drivers \
       glslc \
       libXext && \
     dnf clean all
 
+# Set working directory (your requirement)
 WORKDIR /home/ubuntu/ir-chaos
 
 RUN python3 -m venv /opt/venv && \
     pip install --upgrade pip setuptools wheel
 
-# Optional NVIDIA headless Vulkan ICD (EGL backend).
-# Enable only when building for NVIDIA containers:
-#   --build-arg NVIDIA_EGL_ICD=1 --build-arg VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_egl_icd.json
-RUN if [ "$NVIDIA_EGL_ICD" = "1" ]; then \
-      mkdir -p /etc/vulkan/icd.d && \
-      printf '%s\n' \
+# compile llama.cpp backend with Vulkan
+RUN CMAKE_ARGS="-DGGML_VULKAN=on" \
+    FORCE_CMAKE=1 \
+    pip install --no-binary=llama-cpp-python llama-cpp-python
+
+# NVIDIA headless Vulkan ICD (EGL backend)
+RUN mkdir -p /etc/vulkan/icd.d && \
+    printf '%s\n' \
 '{' \
 '  "file_format_version": "1.0.1",' \
 '  "ICD": {' \
 '    "library_path": "libEGL_nvidia.so.0",' \
 '    "api_version": "1.4.312"' \
 '  }' \
-'}' > /etc/vulkan/icd.d/nvidia_egl_icd.json; \
-    fi
+'}' > /etc/vulkan/icd.d/nvidia_egl_icd.json
 
-ENV VK_DRIVER_FILES=${VK_DRIVER_FILES}
+# Force the container to use the headless NVIDIA Vulkan driver
+ENV VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_egl_icd.json
 
 # ============================================================
-# DEBUG / DEV SECTION (optional)
+# ================= DEBUG / DEV SECTION ======================
+# Everything below this line can be safely removed in production
 # ============================================================
 
+# Vulkan diagnostic tools
 RUN dnf -y install \
       vulkan-tools \
       which \
       findutils && \
     dnf clean all
 
-# Simple Vulkan check
+# Python Vulkan smoke test
 RUN printf '%s\n' \
 'import sys' \
 'import ctypes.util' \
 'print("Python:", sys.version)' \
 'print("Vulkan loader:", ctypes.util.find_library("vulkan"))' \
-> test_vulkan.py
+'import llama_cpp' \
+'print("llama_cpp OK")' \
+> test_llama_vulkan.py
+
+# Optional inference test
+RUN printf '%s\n' \
+'from llama_cpp import Llama' \
+'import os' \
+'' \
+'model = os.environ.get("LLAMA_MODEL", "/models/model.gguf")' \
+'print("model:", model)' \
+'' \
+'llm = Llama(model_path=model, n_gpu_layers=999, verbose=True)' \
+'' \
+'out = llm("Q: say hello in one word\nA:", max_tokens=8)' \
+'print(out["choices"][0]["text"])' \
+> test_llama_infer.py
 
 # Debug entrypoint
 RUN printf '%s\n' \
@@ -85,7 +102,12 @@ RUN printf '%s\n' \
 'vulkaninfo --summary || true' \
 '' \
 'echo "=== Python test ==="' \
-'python test_vulkan.py || true' \
+'python test_llama_vulkan.py || true' \
+'' \
+'if [ -f /models/model.gguf ]; then' \
+'  echo "=== inference test ==="' \
+'  python test_llama_infer.py || true' \
+'fi' \
 '' \
 'exec "$@"' \
 > /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh

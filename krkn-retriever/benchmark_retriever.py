@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -194,9 +195,22 @@ def main():
     parser.add_argument("--rerank-k",     type=int, default=5, help="Top results after reranking (default: 5)")
     parser.add_argument("--limit",        type=int, default=None)
     parser.add_argument("--failures-out", default="outputs/failed_queries.csv")
+    parser.add_argument("--device", choices=["auto", "cuda", "mps", "cpu"], default=os.environ.get("RETRIEVER_DEVICE", "auto"), help="Device policy: acceleration-first by default (auto)")
+    parser.add_argument("--cpu-only", action="store_true", default=os.environ.get("RETRIEVER_CPU_ONLY", "0") == "1", help="Force CPU execution")
+    parser.add_argument("--backend", choices=["auto", "torch", "vulkan"], default=os.environ.get("RETRIEVER_BACKEND", "auto"), help="Retrieval backend")
+    parser.add_argument("--llama-model", default=os.environ.get("LLAMA_EMBED_MODEL", ""), help="Path to GGUF embedding model for vulkan backend")
+    parser.add_argument("--llama-gpu-layers", type=int, default=int(os.environ.get("LLAMA_GPU_LAYERS", "-1")), help="llama.cpp n_gpu_layers for vulkan backend")
     args = parser.parse_args()
 
-    ranker  = get_ranker()
+    bench_start = time.perf_counter()
+
+    ranker  = get_ranker(
+        device_preference=args.device,
+        cpu_only=args.cpu_only,
+        backend=args.backend,
+        llama_model_path=args.llama_model,
+        llama_gpu_layers=args.llama_gpu_layers,
+    )
     results = benchmark(
         ranker,
         args.dataset,
@@ -213,12 +227,14 @@ def main():
     print("=" * 70)
     print(f"Retrieval Model:     {ranker.retriever_model_name}")
     print(f"Cross-Encoder Model: {ranker.cross_encoder_model_name}")
+    print(f"Device:              {ranker.device}")
     print(f"Retrieve K: {args.retrieve_k} | Rerank K: {args.rerank_k}")
     print(f"\nTotal Queries:    {overall['total_queries']}")
     print(f"Top-1 Accuracy:   {overall['top1_accuracy']:.1%} ({overall['top1_count']}/{overall['total_queries']})")
     print(f"Top-{args.rerank_k} Accuracy: {overall['topk_accuracy']:.1%} ({overall['topk_count']}/{overall['total_queries']})")
     print(f"MRR:              {overall['mrr']:.4f}")
     print(f"Avg Latency:      {overall['avg_latency_ms']:.2f}ms")
+    print(f"Total Runtime:    {(time.perf_counter() - bench_start):.2f}s")
     print("=" * 70)
 
     save_failures(results, args.failures_out)
