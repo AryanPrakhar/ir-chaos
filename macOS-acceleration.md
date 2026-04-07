@@ -46,8 +46,6 @@ From repo root, run:
 ```bash
 RETRIEVER_BACKEND=vulkan \
 RETRIEVER_ACCELERATION=gpu \
-RETRIEVER_FORCE_BUILD=1 \
-RETRIEVER_EXTRA_BUILD_ARGS='--build-arg MACOS_MESA_KRUNKIT=1' \
 ./scripts/pipeline_retrieve_only.sh "simulate power outage across zones" 10 5
 ```
 
@@ -55,8 +53,9 @@ Notes:
 
 - `RETRIEVER_BACKEND=vulkan` enables GGUF + `llama.cpp` embedding path.
 - `RETRIEVER_ACCELERATION=gpu` asks for GPU runtime and falls back to CPU if unavailable.
-- `RETRIEVER_EXTRA_BUILD_ARGS='--build-arg MACOS_MESA_KRUNKIT=1'` enables the optional Mesa-krunkit profile in `krkn-retriever/Dockerfile` (recommended on Apple silicon Podman).
+- The script auto-detects macOS and passes the correct build args (`MACOS_MESA_KRUNKIT=1`, `NVIDIA_EGL_ICD=0`, `TORCH_BUILD=cpu`).
 - On first run, a default GGUF embedding model is downloaded to `./models/` if missing.
+- Use `RETRIEVER_FORCE_BUILD=1` to rebuild the image after Dockerfile changes.
 
 ## 3) Confirm acceleration is active
 

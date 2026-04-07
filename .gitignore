@@ -1,3 +1,20 @@
 .cache
 models
 __pycache__
+
+# Local Claude/Copilot context and notes
+.claude/
+claude.md
+
+# Local environment and key material
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+*.secrets
+secrets/
