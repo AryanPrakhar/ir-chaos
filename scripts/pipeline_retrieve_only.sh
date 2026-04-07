@@ -82,7 +82,14 @@ if [[ "$ENGINE" == "podman" ]]; then
   MOUNT_LABEL_SUFFIX=":Z"
 fi
 
-now_ms() { date +%s%3N; }
+now_ms() {
+  # macOS-compatible millisecond timestamp (date +%s%3N not available on macOS)
+  if [[ "$HOST_OS" == "darwin" ]]; then
+    python3 -c "import time; print(int(time.time() * 1000))"
+  else
+    date +%s%3N
+  fi
+}
 
 nvidia_runtime_available() {
   [[ "$ENGINE" == "podman" ]] || return 1
