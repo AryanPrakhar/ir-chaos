@@ -41,7 +41,7 @@ ARG MACOS_MESA_KRUNKIT=0
 RUN set -eux; \
     if [ "$MACOS_MESA_KRUNKIT" = "1" ] && [ "$(uname -m)" = "aarch64" ]; then \
         dnf -y install dnf-plugins-core dnf-plugin-versionlock --setopt=install_weak_deps=False; \
-        dnf -y copr enable slp/mesa-krunkit fedora-40-aarch64; \
+        dnf -y copr enable slp/mesa-krunkit epel-9-aarch64; \
         dnf -y downgrade mesa-vulkan-drivers.aarch64 --repo=copr:copr.fedorainfracloud.org:slp:mesa-krunkit; \
         dnf -y versionlock add mesa-vulkan-drivers; \
         dnf clean all; \
