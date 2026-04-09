@@ -66,6 +66,14 @@ ACCELERATION_MODE="${RETRIEVER_ACCELERATION:-auto}"
 # Auto-detect host OS
 HOST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 
+# On macOS with podman, the libkrun VM provider is required for Vulkan GPU
+# passthrough via virtio-gpu/Venus.  Without this, podman silently falls back to
+# the applehv provider which has no GPU device and causes llvmpipe CPU fallback.
+# Respect an explicit override; default to libkrun when unset.
+if [[ "$HOST_OS" == "darwin" && "$ENGINE" == "podman" ]]; then
+  export CONTAINERS_MACHINE_PROVIDER="${CONTAINERS_MACHINE_PROVIDER:-libkrun}"
+fi
+
 case "$ACCELERATION_MODE" in
   auto|gpu|cpu) ;;
   *) echo "Error: RETRIEVER_ACCELERATION must be one of auto|gpu|cpu"; exit 1 ;;
@@ -216,11 +224,17 @@ configure_acceleration() {
   DEVICE_ARGS=(--device cpu --cpu-only)
   GPU_RUNTIME_KIND="none"
 
-  # macOS: Vulkan acceleration via Venus/libkrun in Docker Desktop
+  # macOS: Vulkan acceleration via libkrun + virtio-gpu + Mesa Venus.
+  # The libkrun VM exposes /dev/dri inside the VM; podman does NOT forward it to
+  # containers automatically.  --device /dev/dri is the one flag that bridges the
+  # VM's DRM nodes into the container so Mesa Venus picks up real GPU hardware
+  # instead of falling back to llvmpipe (CPU software renderer).
   if [[ "$HOST_OS" == "darwin" || "$HOST_OS" == "macos" ]]; then
     GGML_BACKEND_DESIRED="vulkan"
     BUILD_ARGS+=(--build-arg GGML_BACKEND=vulkan)
     GPU_RUNTIME_KIND="vulkan-venus"
+    GPU_FLAGS=(--device /dev/dri)
+    DEVICE_ARGS=(--device auto)   # let llama.cpp use Vulkan; don't force CPU
     return
   fi
 
