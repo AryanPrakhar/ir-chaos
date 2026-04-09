@@ -101,7 +101,7 @@ ensure_podman_machine() {
   if ! "$ENGINE" machine list --format "{{.Name}}" 2>/dev/null | grep -q .; then
     echo "No podman machine found. Initializing..."
     if [[ "$HOST_OS" == "darwin" ]]; then
-      "$ENGINE" machine init --cpus 4 --memory 8192 --disk-size 10
+      "$ENGINE" machine init --cpus 4 --memory 8192 --disk-size 100
     else
       "$ENGINE" machine init
     fi
@@ -124,19 +124,12 @@ ensure_podman_machine() {
     fi
   fi
 
-  # Start machine when stopped.
-  if ! "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -qi '"name".*"'$machine'"' 2>/dev/null; then
-    echo "Error: could not find machine $machine after creation"
-    return 1
-  fi
-
-  # Attempt to start; if it says "already running" or succeeds, we're good.
-  local start_output
-  start_output=$("$ENGINE" machine start "$machine" 2>&1)
-  if ! echo "$start_output" | grep -qi "running"; then
-    echo "Warning: machine start output: $start_output"
-  fi
-
+  # Start the machine (succeeds if running, already running, or starts successfully).
+  "$ENGINE" machine start "$machine" 2>&1 | grep -qi "running\|started" && return 0
+  
+  # If we get here, start command didn't report running/started; something went wrong.
+  echo "Error: podman machine $machine did not respond to start command"
+  return 1
 }
 
 # Build-time args (auto-detected based on host platform)
