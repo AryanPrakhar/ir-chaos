@@ -4,7 +4,7 @@ set -euo pipefail
 # Retrieval-only pipeline: retrieves and reranks results without inference
 #
 # Usage:
-#   ./scripts/pipeline_retrieve_only.sh "your query" [retrieve-k] [rerank-k]
+#   ./scripts/pipeline_retrieve_only.sh "your query" [retrieve-k] [rerank-k] [--verbose]
 #
 # Optional environment variables:
 #   CONTAINER_ENGINE=podman|docker
@@ -23,9 +23,20 @@ set -euo pipefail
 # Output:
 #   retrieval container writes ./shared/retrieval_output.json
 
+VERBOSE=0
+POSITIONAL_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --verbose) VERBOSE=1 ;;
+    *) POSITIONAL_ARGS+=("$arg") ;;
+  esac
+done
+set -- "${POSITIONAL_ARGS[@]}"
+
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 \"<query>\" [retrieve-k] [rerank-k]"
+  echo "Usage: $0 \"<query>\" [retrieve-k] [rerank-k] [--verbose]"
   echo "Defaults: retrieve-k=10, rerank-k=5"
+  echo "Optional: --verbose"
   echo "Optional env: RETRIEVER_ACCELERATION=auto|gpu|cpu RETRIEVER_FORCE_BUILD=1"
   exit 1
 fi
@@ -91,6 +102,56 @@ now_ms() {
   fi
 }
 
+vlog() {
+  if [[ "$VERBOSE" == "1" ]]; then
+    echo "$@"
+  fi
+}
+
+PIPELINE_LOG="$(mktemp)"
+QUERY_LOG=""
+cleanup_logs() {
+  rm -f "$PIPELINE_LOG"
+  if [[ -n "$QUERY_LOG" ]]; then
+    rm -f "$QUERY_LOG"
+  fi
+}
+trap cleanup_logs EXIT
+
+run_cmd() {
+  if [[ "$VERBOSE" == "1" ]]; then
+    "$@"
+    return
+  fi
+
+  if ! "$@" >>"$PIPELINE_LOG" 2>&1; then
+    echo "Error: retrieval pipeline failed."
+    tail -n 40 "$PIPELINE_LOG"
+    rm -f "$PIPELINE_LOG"
+    exit 1
+  fi
+}
+
+index_doc_count() {
+  if [[ ! -f "$META_FILE" ]]; then
+    echo "0"
+    return
+  fi
+  python3 - "$META_FILE" <<'PY'
+import pickle
+import sys
+from pathlib import Path
+
+meta = Path(sys.argv[1])
+if not meta.exists():
+    print("0")
+    raise SystemExit(0)
+with meta.open("rb") as f:
+    ids = pickle.load(f)
+print(len(ids))
+PY
+}
+
 nvidia_runtime_available() {
   [[ "$ENGINE" == "podman" ]] || return 1
   "$ENGINE" run --rm \
@@ -135,7 +196,7 @@ image_is_compatible() {
 download_gguf_model() {
   local out_path="$1"
   local url="https://huggingface.co/${GGUF_REPO}/resolve/main/${GGUF_FILE}"
-  echo "      Downloading GGUF model: ${GGUF_REPO}/${GGUF_FILE}"
+  vlog "      Downloading GGUF model: ${GGUF_REPO}/${GGUF_FILE}"
   mkdir -p "$(dirname "$out_path")"
   curl -L --fail --retry 3 --continue-at - -o "$out_path" "$url"
 }
@@ -148,7 +209,7 @@ configure_acceleration() {
   # macOS is CPU-only by default and by policy.
   if [[ "$HOST_OS" == "darwin" || "$HOST_OS" == "macos" ]]; then
     if [[ "$ACCELERATION_MODE" != "cpu" ]]; then
-      echo "Info: macOS currently supports CPU-only retrieval in this pipeline; forcing RETRIEVER_ACCELERATION=cpu"
+      vlog "Info: macOS currently supports CPU-only retrieval in this pipeline; forcing RETRIEVER_ACCELERATION=cpu"
     fi
     ACCELERATION_MODE="cpu"
     BUILD_ARGS+=(--build-arg NVIDIA_EGL_ICD=0)
@@ -182,7 +243,7 @@ configure_acceleration() {
       BUILD_ARGS+=(--build-arg NVIDIA_EGL_ICD=1)
       BUILD_ARGS+=(--build-arg TORCH_BUILD=auto)
       if [[ "$ACCELERATION_MODE" == "gpu" ]]; then
-        echo "Warning: GPU mode requested but no GPU runtime available; falling back to CPU"
+        vlog "Warning: GPU mode requested but no GPU runtime available; falling back to CPU"
       fi
     fi
     return
@@ -197,7 +258,7 @@ configure_acceleration() {
     GPU_RUNTIME_KIND="nvidia-cuda"
     DEVICE_ARGS=(--device cuda)
   elif [[ "$ACCELERATION_MODE" == "gpu" ]]; then
-    echo "Warning: GPU mode requested but GPU runtime unavailable; falling back to CPU"
+    vlog "Warning: GPU mode requested but GPU runtime unavailable; falling back to CPU"
     DEVICE_ARGS=(--device cpu --cpu-only)
   fi
 }
@@ -260,64 +321,67 @@ fi
 
 configure_acceleration
 
-# ── Banner ──
-
-echo "========================================"
-echo "Krkn Retrieval-Only Pipeline"
-echo "========================================"
-echo "Query: $QUERY"
-echo "Retrieve-K: $RETRIEVE_K  |  Rerank-K: $RERANK_K"
-echo "Engine: $ENGINE  |  Image: $IMAGE"
-echo "Host OS: $HOST_OS  |  Backend: $BACKEND"
-echo "Acceleration: $ACCELERATION_MODE  |  GPU runtime: $GPU_RUNTIME_KIND"
-echo "LLAMA_EMBED_MODEL: ${LLAMA_EMBED_MODEL_PATH:-<not-set>}"
-echo "Build args: ${BUILD_ARGS[*]:-<none>}"
-echo "Output: $SHARED_DIR/retrieval_output.json"
-echo "========================================"
-echo ""
+if [[ "$VERBOSE" == "1" ]]; then
+  echo "========================================"
+  echo "Krkn Retrieval-Only Pipeline"
+  echo "========================================"
+  echo "Query: $QUERY"
+  echo "Retrieve-K: $RETRIEVE_K  |  Rerank-K: $RERANK_K"
+  echo "Engine: $ENGINE  |  Image: $IMAGE"
+  echo "Host OS: $HOST_OS  |  Backend: $BACKEND"
+  echo "Acceleration: $ACCELERATION_MODE  |  GPU runtime: $GPU_RUNTIME_KIND"
+  echo "LLAMA_EMBED_MODEL: ${LLAMA_EMBED_MODEL_PATH:-<not-set>}"
+  echo "Build args: ${BUILD_ARGS[*]:-<none>}"
+  echo "Output: $SHARED_DIR/retrieval_output.json"
+  echo "========================================"
+  echo ""
+fi
 
 TOTAL_START_MS="$(now_ms)"
 
 # ── [1/3] Build image ──
 
-echo "[1/3] Building retriever container image"
+vlog "[1/3] Building retriever container image"
 STEP_START_MS="$(now_ms)"
 if [[ "$FORCE_BUILD" == "1" ]]; then
-  echo "      RETRIEVER_FORCE_BUILD=1 — rebuilding image"
-  build_image
+  vlog "      RETRIEVER_FORCE_BUILD=1 — rebuilding image"
+  run_cmd build_image
 elif "$ENGINE" image exists "$IMAGE"; then
   if image_is_compatible; then
-    echo "      Image $IMAGE already present and compatible, skipping build"
+    vlog "      Image $IMAGE already present and compatible, skipping build"
   else
-    echo "      Existing image incompatible, rebuilding..."
-    build_image
+    vlog "      Existing image incompatible, rebuilding..."
+    run_cmd build_image
   fi
 else
-  echo "      Building image..."
-  build_image
+  vlog "      Building image..."
+  run_cmd build_image
 fi
 STEP_END_MS="$(now_ms)"
-echo "      Step time: $((STEP_END_MS - STEP_START_MS))ms"
-echo "      Torch runtime in image:"
-image_torch_runtime | sed 's/^/        /'
+BUILD_MS="$((STEP_END_MS - STEP_START_MS))"
+vlog "      Step time: ${BUILD_MS}ms"
+if [[ "$VERBOSE" == "1" ]]; then
+  echo "      Torch runtime in image:"
+  image_torch_runtime | sed 's/^/        /'
+fi
 
-echo "      Device args: ${DEVICE_ARGS[*]}"
+vlog "      Device args: ${DEVICE_ARGS[*]}"
 if [[ -n "${GPU_FLAGS+x}" ]] && [[ ${#GPU_FLAGS[@]} -gt 0 ]]; then
-  echo "      GPU flags: ${GPU_FLAGS[*]} (${GPU_RUNTIME_KIND})"
+  vlog "      GPU flags: ${GPU_FLAGS[*]} (${GPU_RUNTIME_KIND})"
 else
-  echo "      GPU flags: disabled"
+  vlog "      GPU flags: disabled"
 fi
 
 # ── [2/3] Ensure FAISS index ──
 
-echo ""
-echo "[2/3] Ensuring FAISS index exists"
+vlog ""
+vlog "[2/3] Ensuring FAISS index exists"
 STEP_START_MS="$(now_ms)"
 if [[ -f "$INDEX_FILE" && -f "$META_FILE" ]]; then
-  echo "      FAISS index already present, skipping indexing"
+  vlog "      FAISS index already present, skipping indexing"
 else
-  echo "      FAISS index missing, building now..."
-  run_retriever_python \
+  vlog "      FAISS index missing, building now..."
+  run_cmd run_retriever_python \
     -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
     -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
     -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
@@ -334,14 +398,17 @@ else
     retriever.py "${DEVICE_ARGS[@]}" index
 fi
 STEP_END_MS="$(now_ms)"
-echo "      Step time: $((STEP_END_MS - STEP_START_MS))ms"
+INDEX_MS="$((STEP_END_MS - STEP_START_MS))"
+vlog "      Step time: ${INDEX_MS}ms"
 
 # ── [3/3] Retrieval + reranking ──
 
-echo ""
-echo "[3/3] Running retrieval and reranking query"
+vlog ""
+vlog "[3/3] Running retrieval and reranking query"
 STEP_START_MS="$(now_ms)"
-run_retriever_python \
+QUERY_LOG="$(mktemp)"
+if [[ "$VERBOSE" == "1" ]]; then
+  if ! run_retriever_python \
   -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
   -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
   -v "$SHARED_DIR:/io$MOUNT_LABEL_SUFFIX" \
@@ -358,14 +425,160 @@ run_retriever_python \
   "$IMAGE" \
   retriever.py "${DEVICE_ARGS[@]}" query "$QUERY" \
     --retrieve-k "$RETRIEVE_K" \
-    --rerank-k "$RERANK_K" \
-    --export /io/retrieval_output.json \
-    --include-text
+      --rerank-k "$RERANK_K" \
+      --export /io/retrieval_output.json \
+      --include-text >"$QUERY_LOG" 2>&1; then
+    echo "Error: retrieval query failed."
+    cat "$QUERY_LOG"
+    exit 1
+  fi
+else
+  if ! run_retriever_python \
+    -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
+    -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
+    -v "$SHARED_DIR:/io$MOUNT_LABEL_SUFFIX" \
+    -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
+    -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
+    -e DOCS_DIR=/app/docs \
+    -e RETRIEVER_BACKEND="$BACKEND" \
+    -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
+    -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
+    -e HF_HOME=/root/.cache/huggingface \
+    -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
+    -e TORCH_HOME=/root/.cache/torch \
+    -w /app \
+    "$IMAGE" \
+    retriever.py "${DEVICE_ARGS[@]}" query "$QUERY" \
+      --retrieve-k "$RETRIEVE_K" \
+      --rerank-k "$RERANK_K" \
+      --export /io/retrieval_output.json \
+      --include-text >"$QUERY_LOG" 2>&1; then
+    echo "Error: retrieval query failed."
+    tail -n 40 "$QUERY_LOG"
+    exit 1
+  fi
+fi
 STEP_END_MS="$(now_ms)"
-echo "      Step time: $((STEP_END_MS - STEP_START_MS))ms"
+QUERY_MS="$((STEP_END_MS - STEP_START_MS))"
+vlog "      Step time: ${QUERY_MS}ms"
 
 TOTAL_END_MS="$(now_ms)"
+TOTAL_MS="$((TOTAL_END_MS - TOTAL_START_MS))"
+
+DOC_COUNT="$(index_doc_count)"
+OUTPUT_PATH="$SHARED_DIR/retrieval_output.json"
+SECONDS_DISPLAY="$(python3 - "$QUERY_MS" <<'PY'
+import sys
+ms = int(sys.argv[1])
+print(f"{ms/1000.0:.1f}")
+PY
+)"
 
 echo ""
-echo "Done! Results saved to: $SHARED_DIR/retrieval_output.json"
-echo "Total elapsed: $((TOTAL_END_MS - TOTAL_START_MS))ms"
+echo "  Searching ${DOC_COUNT} scenarios...  done in ${SECONDS_DISPLAY}s"
+echo ""
+python3 - "$OUTPUT_PATH" <<'PY'
+import json
+import math
+import sys
+from pathlib import Path
+
+FAISS_GAP = 0.07
+CE_GAP = 1.0
+CONF_CE_WEIGHT = 0.8
+CONF_FAISS_WEIGHT = 0.2
+
+path = Path(sys.argv[1])
+if not path.exists():
+    print("  No retrieval output found.")
+    raise SystemExit(0)
+
+payload = json.loads(path.read_text(encoding="utf-8"))
+results = payload.get("results", [])
+
+if not results:
+    print("  No matching scenarios.")
+    raise SystemExit(0)
+
+def confidence_score(row):
+    """Return the raw blended score (0.0 - 1.0) without any UX transforms."""
+    ce = float(row.get("score", 0.0))
+    faiss = float(row.get("retrieval_score", 0.0))
+    ce_sigmoid = 1.0 / (1.0 + math.exp(-ce))
+    blended = (CONF_CE_WEIGHT * ce_sigmoid) + (CONF_FAISS_WEIGHT * max(0.0, min(1.0, faiss)))
+    return max(0.0, min(1.0, blended))
+
+clear_count = 1
+if len(results) >= 2:
+    faiss_gap = abs(float(results[0].get("retrieval_score", 0.0)) - float(results[1].get("retrieval_score", 0.0)))
+    ce_gap = abs(float(results[0].get("score", 0.0)) - float(results[1].get("score", 0.0)))
+    if faiss_gap < FAISS_GAP or ce_gap < CE_GAP:
+        clear_count = 2
+
+best = results[:clear_count]
+rest = results[clear_count:]
+all_scores = [confidence_score(r) for r in results]
+
+def render_bar(score, width=10):
+    filled = max(0, min(width, int(round(score * width))))
+    return ("█" * filled) + ("░" * (width - filled))
+
+name_w = 22
+bar_w = 10
+top_border = "  ┌─ Best matches ──────────────────────────────────────────────┐"
+bottom_border = "  └─────────────────────────────────────────────────────────────┘"
+print(top_border)
+for idx, row in enumerate(best, 1):
+    name = str(row.get("name", "Unknown"))[:name_w].ljust(name_w)
+    score = all_scores[idx - 1]
+    bar = render_bar(score, width=bar_w)
+    print(f"  │  {idx:<2} {name} {bar}   {score:0.3f}            │")
+print(bottom_border)
+
+if rest:
+    print("")
+    print("  Also retrieved (lower confidence)")
+    for offset, row in enumerate(rest, clear_count + 1):
+        name = str(row.get("name", "Unknown"))[:name_w].ljust(name_w)
+        score = all_scores[offset - 1]
+        bar = render_bar(score, width=bar_w)
+        print(f"     {offset:<2} {name} {bar}   {score:0.4f}")
+PY
+
+echo ""
+echo "  Results -> $OUTPUT_PATH"
+
+if [[ "$VERBOSE" == "1" ]]; then
+  echo ""
+  echo "[verbose] Step timings"
+  echo "[1/3] Building retriever container image   (${BUILD_MS}ms)"
+  echo "[2/3] Ensuring FAISS index exists          (${INDEX_MS}ms)"
+  echo "[3/3] Running retrieval and reranking      (${QUERY_MS}ms)"
+  echo "Total elapsed: ${TOTAL_MS}ms"
+  python3 - "$OUTPUT_PATH" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.exists():
+    raise SystemExit(0)
+
+payload = json.loads(path.read_text(encoding="utf-8"))
+results = payload.get("results", [])
+if not results:
+    raise SystemExit(0)
+
+def fmt(values):
+    return "  ".join(f"{v:>7.4f}" for v in values)
+
+ce_scores = [float(r.get("score", 0.0)) for r in results]
+faiss_scores = [float(r.get("retrieval_score", 0.0)) for r in results]
+print("")
+print(f"  CE scores:  {fmt(ce_scores)}")
+print(f"  FAISS:      {fmt(faiss_scores)}")
+PY
+  echo ""
+  echo "[verbose] Retriever command output"
+  cat "$QUERY_LOG"
+fi
