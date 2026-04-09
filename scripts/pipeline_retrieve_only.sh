@@ -98,17 +98,17 @@ ensure_podman_machine() {
   fi
 
   # Create machine if missing.
-  if ! "$ENGINE" machine list --format "{{.Name}}" | grep -q .; then
+  if ! "$ENGINE" machine list --format "{{.Name}}" 2>/dev/null | grep -q .; then
     echo "No podman machine found. Initializing..."
     if [[ "$HOST_OS" == "darwin" ]]; then
-      "$ENGINE" machine init --now --cpus 4 --memory 8192
+      "$ENGINE" machine init --cpus 4 --memory 8192 --disk-size 10
     else
       "$ENGINE" machine init
     fi
   fi
 
   local machine
-  machine=$("$ENGINE" machine list --format "{{.Name}}" | head -n1)
+  machine=$("$ENGINE" machine list --format "{{.Name}}" | head -n1 | tr -d '*')
   if [[ -z "$machine" ]]; then
     echo "Error: could not determine podman machine name"
     return 1
@@ -116,16 +116,16 @@ ensure_podman_machine() {
 
   # On macOS, recreate applehv machine so Vulkan can use libkrun path.
   if [[ "$HOST_OS" == "darwin" ]]; then
-    if "$ENGINE" machine inspect "$machine" | grep -q "applehv"; then
+    if "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -qi "applehv"; then
       echo "Recreating podman machine with libkrun (required for Vulkan): $machine"
       "$ENGINE" machine rm -f "$machine"
-      "$ENGINE" machine init --now --cpus 4 --memory 8192
-      machine=$("$ENGINE" machine list --format "{{.Name}}" | head -n1)
+      "$ENGINE" machine init --cpus 4 --memory 8192 --disk-size 100
+      machine=$("$ENGINE" machine list --format "{{.Name}}" | head -n1 | tr -d '*')
     fi
   fi
 
   # Start machine when stopped.
-  if ! "$ENGINE" machine inspect "$machine" | grep -q '"Running": true'; then
+  if ! "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -q '"Running":.*true'; then
     echo "Starting podman machine: $machine"
     "$ENGINE" machine start "$machine"
   fi
