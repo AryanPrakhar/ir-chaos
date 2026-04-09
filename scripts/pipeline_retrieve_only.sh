@@ -89,6 +89,48 @@ if ! command -v "$ENGINE" >/dev/null 2>&1; then
   exit 1
 fi
 
+ensure_podman_machine() {
+  [[ "$ENGINE" == "podman" ]] || return 0
+
+  # Ensure provider for macOS Vulkan path.
+  if [[ "$HOST_OS" == "darwin" ]]; then
+    export CONTAINERS_MACHINE_PROVIDER="${CONTAINERS_MACHINE_PROVIDER:-libkrun}"
+  fi
+
+  # Create machine if missing.
+  if ! "$ENGINE" machine list --format "{{.Name}}" | grep -q .; then
+    echo "No podman machine found. Initializing..."
+    if [[ "$HOST_OS" == "darwin" ]]; then
+      "$ENGINE" machine init --now --cpus 4 --memory 8192
+    else
+      "$ENGINE" machine init
+    fi
+  fi
+
+  local machine
+  machine=$("$ENGINE" machine list --format "{{.Name}}" | head -n1)
+  if [[ -z "$machine" ]]; then
+    echo "Error: could not determine podman machine name"
+    return 1
+  fi
+
+  # On macOS, recreate applehv machine so Vulkan can use libkrun path.
+  if [[ "$HOST_OS" == "darwin" ]]; then
+    if "$ENGINE" machine inspect "$machine" | grep -q "applehv"; then
+      echo "Recreating podman machine with libkrun (required for Vulkan): $machine"
+      "$ENGINE" machine rm -f "$machine"
+      "$ENGINE" machine init --now --cpus 4 --memory 8192
+      machine=$("$ENGINE" machine list --format "{{.Name}}" | head -n1)
+    fi
+  fi
+
+  # Start machine when stopped.
+  if ! "$ENGINE" machine inspect "$machine" | grep -q '"Running": true'; then
+    echo "Starting podman machine: $machine"
+    "$ENGINE" machine start "$machine"
+  fi
+}
+
 # Build-time args (auto-detected based on host platform)
 BUILD_ARGS=()
 GPU_FLAGS=()
@@ -326,6 +368,7 @@ fi
 TOTAL_START_MS="$(now_ms)"
 
 # ── [1/3] Build image ──
+ensure_podman_machine
 
 vlog "[1/3] Building retriever container image"
 STEP_START_MS="$(now_ms)"
@@ -568,3 +611,16 @@ PY
   echo "[verbose] Retriever command output"
   cat "$QUERY_LOG"
 fi
+
+
+
+  # configure_acceleration() for macOS:                                            
+  # - GPU_FLAGS=(--device /dev/dri) — forwards the virtio-gpu DRM nodes from the libkrun VM into the 
+  # container. Without this, Mesa has no hardware device and falls back to llvmpipe (CPU renderer).  
+  # - DEVICE_ARGS=(--device auto) — clears the --device cpu --cpu-only that was being passed to      
+  # retriever.py, which was overriding Vulkan and forcing CPU execution.                             
+                                                                                                   
+  # CONTAINERS_MACHINE_PROVIDER export:
+  # - Automatically sets CONTAINERS_MACHINE_PROVIDER=libkrun for all podman commands in the script   
+  # when on macOS, so podman targets the correct libkrun machine instead of silently using applehv.  
+  # Respects an explicit override if already set in the environment. 
