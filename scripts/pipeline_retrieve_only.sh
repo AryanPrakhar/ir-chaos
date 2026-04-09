@@ -210,6 +210,22 @@ build_image() {
     "$ROOT_DIR"
 }
 
+run_engine() {
+  if [[ -n "${GPU_FLAGS+x}" ]] && [[ ${#GPU_FLAGS[@]} -gt 0 ]]; then
+    "$ENGINE" run --rm "${GPU_FLAGS[@]}" "$@"
+  else
+    "$ENGINE" run --rm "$@"
+  fi
+}
+
+run_retriever_python() {
+  local run_args=(--entrypoint python3)
+  if [[ -n "${LLAMA_MOUNT_ARGS+x}" ]] && [[ ${#LLAMA_MOUNT_ARGS[@]} -gt 0 ]]; then
+    run_args+=("${LLAMA_MOUNT_ARGS[@]}")
+  fi
+  run_engine "${run_args[@]}" "$@"
+}
+
 # ── Setup ──
 
 mkdir -p "$SHARED_DIR" "$HF_CACHE_DIR" "$TORCH_CACHE_DIR"
@@ -286,7 +302,7 @@ echo "      Torch runtime in image:"
 image_torch_runtime | sed 's/^/        /'
 
 echo "      Device args: ${DEVICE_ARGS[*]}"
-if [[ ${#GPU_FLAGS[@]} -gt 0 ]]; then
+if [[ -n "${GPU_FLAGS+x}" ]] && [[ ${#GPU_FLAGS[@]} -gt 0 ]]; then
   echo "      GPU flags: ${GPU_FLAGS[*]} (${GPU_RUNTIME_KIND})"
 else
   echo "      GPU flags: disabled"
@@ -301,10 +317,7 @@ if [[ -f "$INDEX_FILE" && -f "$META_FILE" ]]; then
   echo "      FAISS index already present, skipping indexing"
 else
   echo "      FAISS index missing, building now..."
-  "$ENGINE" run --rm \
-    "${GPU_FLAGS[@]}" \
-    --entrypoint python3 \
-    "${LLAMA_MOUNT_ARGS[@]}" \
+  run_retriever_python \
     -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
     -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
     -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
@@ -328,10 +341,7 @@ echo "      Step time: $((STEP_END_MS - STEP_START_MS))ms"
 echo ""
 echo "[3/3] Running retrieval and reranking query"
 STEP_START_MS="$(now_ms)"
-"$ENGINE" run --rm \
-  "${GPU_FLAGS[@]}" \
-  --entrypoint python3 \
-  "${LLAMA_MOUNT_ARGS[@]}" \
+run_retriever_python \
   -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
   -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
   -v "$SHARED_DIR:/io$MOUNT_LABEL_SUFFIX" \
