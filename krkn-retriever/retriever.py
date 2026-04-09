@@ -16,6 +16,14 @@ from sentence_transformers import SentenceTransformer
 # SOTA Performance
 # CROSS_ENCODER_MODEL = "BAAI/bge-reranker-v2-m3"
 CROSS_ENCODER_MODEL = "BAAI/bge-reranker-base"
+
+MIN_FAISS_SCORE = 0.23
+FAISS_TOP2_GAP_THRESHOLD = 0.07
+CE_TOP2_GAP_THRESHOLD = 1.0
+FINAL_CE_WEIGHT = 0.8
+FINAL_FAISS_WEIGHT = 0.2
+MIN_QUERY_WORDS = 4
+MIN_CE_SCORE = -9.0
 RETRIEVER_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 DEFAULT_BACKEND = os.environ.get("RETRIEVER_BACKEND", "auto")
 DEFAULT_LLAMA_MODEL = os.environ.get("LLAMA_EMBED_MODEL", "")
@@ -210,6 +218,10 @@ class CrossEncoderRanker:
         if self.faiss_index is None:
             raise RuntimeError("Index not found. Please build it first.")
 
+        if len(query.split()) < MIN_QUERY_WORDS:
+            print(f"Query rejected: please provide at least {MIN_QUERY_WORDS} words.")
+            return []
+
         self._init_models()
         self._load_doc_texts()
 
@@ -230,12 +242,28 @@ class CrossEncoderRanker:
                 "retrieval_score": float(scores[0][j])
             })
 
+        if not candidates or candidates[0]["retrieval_score"] < MIN_FAISS_SCORE:
+            print(
+                f"No matching scenarios (top FAISS score {candidates[0]['retrieval_score'] if candidates else float('-inf'):.4f} "
+                f"< {MIN_FAISS_SCORE:.2f})."
+            )
+            total_ms = (time.perf_counter() - search_start) * 1000
+            print(f"Timing: retrieval={retrieval_ms:.1f}ms | rerank=0.0ms | total={total_ms:.1f}ms")
+            return []
+
         # Stage 2: Cross-Encoder reranking on full candidate pool
         rerank_start = time.perf_counter()
         pairs = [[query, self.prepare_for_reranking(c["text"])] for c in candidates]
         batch_size = 16 if self.device == "cuda" else 8
         ce_scores = self.cross_encoder.compute_score(pairs, batch_size=batch_size)
         rerank_ms = (time.perf_counter() - rerank_start) * 1000
+
+        top_ce_score = max((float(s) for s in ce_scores), default=float("-inf"))
+        if top_ce_score < MIN_CE_SCORE:
+            print(f"No matching scenarios (top Cross-Encoder score {top_ce_score:.4f} < {MIN_CE_SCORE:.1f}).")
+            total_ms = (time.perf_counter() - search_start) * 1000
+            print(f"Timing: retrieval={retrieval_ms:.1f}ms | rerank={rerank_ms:.1f}ms | total={total_ms:.1f}ms")
+            return []
 
         results = []
         for i, ce_score in enumerate(ce_scores):
@@ -246,7 +274,15 @@ class CrossEncoderRanker:
                 "retrieval_score": candidates[i]["retrieval_score"]
             })
 
-        results_sorted = sorted(results, key=lambda x: x["score"], reverse=True)
+        for row in results:
+            row["final_score"] = (FINAL_CE_WEIGHT * row["score"]) + (FINAL_FAISS_WEIGHT * row["retrieval_score"])
+
+        results_sorted = sorted(results, key=lambda x: x["final_score"], reverse=True)
+        if len(results_sorted) >= 2:
+            faiss_gap = abs(results_sorted[0]["retrieval_score"] - results_sorted[1]["retrieval_score"])
+            ce_gap = abs(results_sorted[0]["score"] - results_sorted[1]["score"])
+            if faiss_gap < FAISS_TOP2_GAP_THRESHOLD or ce_gap < CE_TOP2_GAP_THRESHOLD:
+                rerank_k = max(rerank_k, 2)
         total_ms = (time.perf_counter() - search_start) * 1000
 
         if self.device == "cuda":
@@ -378,6 +414,10 @@ class LlamaVulkanRanker:
         if self.faiss_index is None:
             raise RuntimeError("Index not found. Please build it first.")
 
+        if len(query.split()) < MIN_QUERY_WORDS:
+            print(f"Query rejected: please provide at least {MIN_QUERY_WORDS} words.")
+            return []
+
         self._init_models()
         self._load_doc_texts()
         search_start = time.perf_counter()
@@ -399,12 +439,28 @@ class LlamaVulkanRanker:
                 "retrieval_score": retrieval_score,
             })
 
+        if not candidates or candidates[0]["retrieval_score"] < MIN_FAISS_SCORE:
+            print(
+                f"No matching scenarios (top FAISS score {candidates[0]['retrieval_score'] if candidates else float('-inf'):.4f} "
+                f"< {MIN_FAISS_SCORE:.2f})."
+            )
+            total_ms = (time.perf_counter() - search_start) * 1000
+            print(f"Timing: retrieval={retrieval_ms:.1f}ms | rerank=0.0ms | total={total_ms:.1f}ms")
+            return []
+
         rerank_start = time.perf_counter()
         pairs = [[query, self.prepare_for_reranking(c["text"])] for c in candidates]
         batch_size = 16 if self.rerank_device == "cuda" else 8
 
         try:
             ce_scores = self.cross_encoder.compute_score(pairs, batch_size=batch_size)
+            top_ce_score = max((float(s) for s in ce_scores), default=float("-inf"))
+            if top_ce_score < MIN_CE_SCORE:
+                print(f"No matching scenarios (top Cross-Encoder score {top_ce_score:.4f} < {MIN_CE_SCORE:.1f}).")
+                rerank_ms = (time.perf_counter() - rerank_start) * 1000
+                total_ms = (time.perf_counter() - search_start) * 1000
+                print(f"Timing: retrieval={retrieval_ms:.1f}ms | rerank={rerank_ms:.1f}ms | total={total_ms:.1f}ms")
+                return []
             results = []
             for i, ce_score in enumerate(ce_scores):
                 results.append({
@@ -413,10 +469,20 @@ class LlamaVulkanRanker:
                     "score": float(ce_score),
                     "retrieval_score": candidates[i]["retrieval_score"],
                 })
-            results = sorted(results, key=lambda x: x["score"], reverse=True)
+            for row in results:
+                row["final_score"] = (FINAL_CE_WEIGHT * row["score"]) + (FINAL_FAISS_WEIGHT * row["retrieval_score"])
+            results = sorted(results, key=lambda x: x["final_score"], reverse=True)
         except Exception as exc:
             print(f"Reranker failed on backend={self.rerank_device}, falling back to cosine scores: {exc}")
             results = sorted(candidates, key=lambda x: x["retrieval_score"], reverse=True)
+            for row in results:
+                row["final_score"] = row["retrieval_score"]
+
+        if len(results) >= 2:
+            faiss_gap = abs(results[0]["retrieval_score"] - results[1]["retrieval_score"])
+            ce_gap = abs(results[0]["score"] - results[1]["score"])
+            if faiss_gap < FAISS_TOP2_GAP_THRESHOLD or ce_gap < CE_TOP2_GAP_THRESHOLD:
+                rerank_k = max(rerank_k, 2)
         rerank_ms = (time.perf_counter() - rerank_start) * 1000
 
         total_ms = (time.perf_counter() - search_start) * 1000
@@ -466,9 +532,25 @@ def display_results(result):
     if not result:
         print("\nNo results found.")
         return
-    
+
+    clear_answers = result[:1]
+    if len(result) >= 2:
+        faiss_gap = abs(result[0]["retrieval_score"] - result[1]["retrieval_score"])
+        ce_gap = abs(result[0]["score"] - result[1]["score"])
+        if faiss_gap < FAISS_TOP2_GAP_THRESHOLD or ce_gap < CE_TOP2_GAP_THRESHOLD:
+            clear_answers = result[:2]
+
     print("\n" + "=" * 95)
-    print("RERANKED RESULTS (Top-K)")
+    if len(clear_answers) == 2:
+        print("Clear answers")
+    else:
+        print("Clear answer")
+    print("=" * 95)
+    for i, r in enumerate(clear_answers, 1):
+        print(f"  [{i}] {r['name']:<40} | Cross-Encoder: {r['score']:>7.4f} | FAISS: {r['retrieval_score']:>7.4f}")
+
+    print("\n" + "=" * 95)
+    print("Most relevant scenarios")
     print("=" * 95)
     for i, r in enumerate(result, 1):
         print(f"  [{i}] {r['name']:<40} | Cross-Encoder: {r['score']:>7.4f} | FAISS: {r['retrieval_score']:>7.4f}")
