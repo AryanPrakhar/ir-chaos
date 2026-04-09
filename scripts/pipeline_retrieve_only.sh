@@ -145,34 +145,27 @@ configure_acceleration() {
   DEVICE_ARGS=(--device auto)
   GPU_RUNTIME_KIND="none"
 
-  # CPU-only mode: no GPU probing, no GPU build args
-  if [[ "$ACCELERATION_MODE" == "cpu" ]]; then
-    BUILD_ARGS+=(--build-arg MACOS_MESA_KRUNKIT=0)
+  # macOS is CPU-only by default and by policy.
+  if [[ "$HOST_OS" == "darwin" || "$HOST_OS" == "macos" ]]; then
+    if [[ "$ACCELERATION_MODE" != "cpu" ]]; then
+      echo "Info: macOS currently supports CPU-only retrieval in this pipeline; forcing RETRIEVER_ACCELERATION=cpu"
+    fi
+    ACCELERATION_MODE="cpu"
     BUILD_ARGS+=(--build-arg NVIDIA_EGL_ICD=0)
     BUILD_ARGS+=(--build-arg TORCH_BUILD=cpu)
     DEVICE_ARGS=(--device cpu --cpu-only)
     return
   fi
 
-  # macOS Apple Silicon: Venus/libkrun/MoltenVK pipeline
-  if [[ "$HOST_OS" == "darwin" || "$HOST_OS" == "macos" ]]; then
-    BUILD_ARGS+=(--build-arg MACOS_MESA_KRUNKIT=1)
+  # CPU-only mode: no GPU probing, no GPU build args
+  if [[ "$ACCELERATION_MODE" == "cpu" ]]; then
     BUILD_ARGS+=(--build-arg NVIDIA_EGL_ICD=0)
     BUILD_ARGS+=(--build-arg TORCH_BUILD=cpu)
-
-    if podman_dri_runtime_supported; then
-      GPU_FLAGS=(--device /dev/dri)
-      GPU_RUNTIME_KIND="podman-dri-venus"
-    else
-      echo "Warning: /dev/dri not found in Podman VM — falling back to CPU"
-      echo "         Ensure Podman machine uses applehv provider and has render nodes."
-    fi
+    DEVICE_ARGS=(--device cpu --cpu-only)
     return
   fi
 
   # Linux: NVIDIA CUDA → DRI fallback
-  BUILD_ARGS+=(--build-arg MACOS_MESA_KRUNKIT=0)
-
   if [[ "$BACKEND" == "vulkan" ]]; then
     # Vulkan backend: probe NVIDIA first (runtime only), then DRI
     if nvidia_runtime_available; then

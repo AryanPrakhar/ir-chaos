@@ -1,7 +1,7 @@
 .cache
 models
 __pycache__
-
+krkn-retriever/venv
 # Local Claude/Copilot context and notes
 .claude/
 claude.md
