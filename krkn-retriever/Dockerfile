@@ -1,4 +1,4 @@
-FROM registry.fedoraproject.org/fedora:40
+FROM registry.fedoraproject.org/fedora:42
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -6,13 +6,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-ARG NVIDIA_EGL_ICD=1
 ARG TORCH_BUILD=auto
 ARG TORCH_CUDA_INDEX_URL=https://download.pytorch.org/whl/cu126
 ARG VK_DRIVER_FILES=""
 ENV VK_DRIVER_FILES=${VK_DRIVER_FILES}
 
-RUN dnf -y install --setopt=install_weak_deps=False \
+# Vulkan runtime + build tools (Venus-enabled mesa for macOS Docker Desktop)
+RUN dnf -y install dnf-plugins-core dnf-plugin-versionlock && \
+    dnf -y copr enable slp/mesa-libkrun-vulkan && \
+    dnf -y install --setopt=install_weak_deps=False \
       python3 \
       python3-pip \
       python3-devel \
@@ -28,39 +30,19 @@ RUN dnf -y install --setopt=install_weak_deps=False \
       vulkan-headers \
       mesa-vulkan-drivers \
       glslc && \
+    dnf versionlock add mesa-vulkan-drivers && \
     dnf clean all
 
 RUN python3 -m venv /opt/venv && \
     pip install --upgrade pip setuptools wheel
 
-# Optional NVIDIA EGL ICD (for headless NVIDIA Vulkan environments).
-RUN set -eux; \
-    if [ "$NVIDIA_EGL_ICD" = "1" ]; then \
-      mkdir -p /etc/vulkan/icd.d && \
-      printf '%s\n' \
-        '{' \
-        '  "file_format_version": "1.0.1",' \
-        '  "ICD": {' \
-        '    "library_path": "libEGL_nvidia.so.0",' \
-        '    "api_version": "1.4.312"' \
-        '  }' \
-        '}' > /etc/vulkan/icd.d/nvidia_egl_icd.json; \
-    fi
-
-# Vulkan-enabled llama.cpp for embedding acceleration.
+# llama.cpp with Vulkan acceleration
 RUN CMAKE_ARGS="-DGGML_VULKAN=on" \
     FORCE_CMAKE=1 \
     pip install --no-binary=llama-cpp-python llama-cpp-python
 
-# Torch: GPU-first when auto/cuda, CPU when requested.
-RUN set -eux; \
-    if [ "$TORCH_BUILD" = "cuda" ]; then \
-      pip install --index-url "$TORCH_CUDA_INDEX_URL" torch; \
-    elif [ "$TORCH_BUILD" = "cpu" ]; then \
-      pip install torch; \
-    else \
-      pip install --index-url "$TORCH_CUDA_INDEX_URL" torch || pip install torch; \
-    fi && \
+# PyTorch + ML dependencies (CPU wheels; GPU acceleration via Vulkan/llama.cpp)
+RUN pip install torch && \
     pip install \
       transformers==4.52.4 \
       huggingface_hub[cli] \
