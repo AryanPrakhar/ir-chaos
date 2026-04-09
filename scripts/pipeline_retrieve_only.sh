@@ -87,6 +87,7 @@ GPU_FLAGS=()
 DEVICE_ARGS=(--device auto)
 LLAMA_MOUNT_ARGS=()
 GPU_RUNTIME_KIND="none"
+GGML_BACKEND_DESIRED=""
 
 MOUNT_LABEL_SUFFIX=""
 if [[ "$ENGINE" == "podman" ]]; then
@@ -187,9 +188,18 @@ image_torch_runtime() {
 
 image_is_compatible() {
   if [[ "$BACKEND" == "vulkan" ]]; then
-    "$ENGINE" run --rm --entrypoint python3 "$IMAGE" -c "import faiss, llama_cpp" >/dev/null 2>&1
+    "$ENGINE" run --rm --entrypoint python3 "$IMAGE" -c "import faiss, llama_cpp" >/dev/null 2>&1 || return 1
   else
-    "$ENGINE" run --rm --entrypoint python3 "$IMAGE" -c "import faiss" >/dev/null 2>&1
+    "$ENGINE" run --rm --entrypoint python3 "$IMAGE" -c "import faiss" >/dev/null 2>&1 || return 1
+  fi
+  # Verify image was built with the right GGML backend
+  if [[ -n "$GGML_BACKEND_DESIRED" ]]; then
+    local image_backend
+    image_backend=$("$ENGINE" run --rm --entrypoint sh "$IMAGE" -c 'echo $GGML_BACKEND_BUILT' 2>/dev/null)
+    if [[ "$image_backend" != "$GGML_BACKEND_DESIRED" ]]; then
+      vlog "      Image backend mismatch: built=$image_backend want=$GGML_BACKEND_DESIRED"
+      return 1
+    fi
   fi
 }
 
@@ -203,64 +213,20 @@ download_gguf_model() {
 
 configure_acceleration() {
   GPU_FLAGS=()
-  DEVICE_ARGS=(--device auto)
+  DEVICE_ARGS=(--device cpu --cpu-only)
   GPU_RUNTIME_KIND="none"
 
-  # macOS is CPU-only by default and by policy.
+  # macOS: Vulkan acceleration via Venus/libkrun in Docker Desktop
   if [[ "$HOST_OS" == "darwin" || "$HOST_OS" == "macos" ]]; then
-    if [[ "$ACCELERATION_MODE" != "cpu" ]]; then
-      vlog "Info: macOS currently supports CPU-only retrieval in this pipeline; forcing RETRIEVER_ACCELERATION=cpu"
-    fi
-    ACCELERATION_MODE="cpu"
-    BUILD_ARGS+=(--build-arg NVIDIA_EGL_ICD=0)
-    BUILD_ARGS+=(--build-arg TORCH_BUILD=cpu)
-    DEVICE_ARGS=(--device cpu --cpu-only)
+    GGML_BACKEND_DESIRED="vulkan"
+    BUILD_ARGS+=(--build-arg GGML_BACKEND=vulkan)
+    GPU_RUNTIME_KIND="vulkan-venus"
     return
   fi
 
-  # CPU-only mode: no GPU probing, no GPU build args
-  if [[ "$ACCELERATION_MODE" == "cpu" ]]; then
-    BUILD_ARGS+=(--build-arg NVIDIA_EGL_ICD=0)
-    BUILD_ARGS+=(--build-arg TORCH_BUILD=cpu)
-    DEVICE_ARGS=(--device cpu --cpu-only)
-    return
-  fi
-
-  # Linux: NVIDIA CUDA → DRI fallback
-  if [[ "$BACKEND" == "vulkan" ]]; then
-    # Vulkan backend: probe NVIDIA first (runtime only), then DRI
-    if nvidia_runtime_available; then
-      BUILD_ARGS+=(--build-arg NVIDIA_EGL_ICD=1)
-      BUILD_ARGS+=(--build-arg TORCH_BUILD=auto)
-      GPU_FLAGS=(--device nvidia.com/gpu=all --security-opt=label=disable)
-      GPU_RUNTIME_KIND="nvidia-cuda"
-    elif podman_dri_runtime_supported; then
-      BUILD_ARGS+=(--build-arg NVIDIA_EGL_ICD=0)
-      BUILD_ARGS+=(--build-arg TORCH_BUILD=auto)
-      GPU_FLAGS=(--device /dev/dri)
-      GPU_RUNTIME_KIND="podman-dri"
-    else
-      BUILD_ARGS+=(--build-arg NVIDIA_EGL_ICD=1)
-      BUILD_ARGS+=(--build-arg TORCH_BUILD=auto)
-      if [[ "$ACCELERATION_MODE" == "gpu" ]]; then
-        vlog "Warning: GPU mode requested but no GPU runtime available; falling back to CPU"
-      fi
-    fi
-    return
-  fi
-
-  # Torch backend on Linux
-  BUILD_ARGS+=(--build-arg NVIDIA_EGL_ICD=1)
-  BUILD_ARGS+=(--build-arg TORCH_BUILD=auto)
-
-  if gpu_runtime_supported; then
-    GPU_FLAGS=(--device nvidia.com/gpu=all --security-opt=label=disable)
-    GPU_RUNTIME_KIND="nvidia-cuda"
-    DEVICE_ARGS=(--device cuda)
-  elif [[ "$ACCELERATION_MODE" == "gpu" ]]; then
-    vlog "Warning: GPU mode requested but GPU runtime unavailable; falling back to CPU"
-    DEVICE_ARGS=(--device cpu --cpu-only)
-  fi
+  # Everything else: CPU only
+  GGML_BACKEND_DESIRED="cpu"
+  BUILD_ARGS+=(--build-arg GGML_BACKEND=cpu)
 }
 
 build_image() {
@@ -290,6 +256,12 @@ run_retriever_python() {
 # ── Setup ──
 
 mkdir -p "$SHARED_DIR" "$HF_CACHE_DIR" "$TORCH_CACHE_DIR"
+
+# macOS: use llama.cpp (vulkan backend) for Vulkan GPU acceleration
+if [[ "$BACKEND" == "auto" && ( "$HOST_OS" == "darwin" || "$HOST_OS" == "macos" ) ]]; then
+  BACKEND="vulkan"
+  vlog "macOS detected; using llama.cpp backend for Vulkan acceleration"
+fi
 
 # Resolve GGUF model for vulkan backend
 if [[ "$BACKEND" == "vulkan" ]]; then
