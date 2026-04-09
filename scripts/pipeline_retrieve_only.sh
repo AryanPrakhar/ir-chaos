@@ -127,9 +127,15 @@ ensure_podman_machine() {
   # Start machine when stopped.
   if ! "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -q '"Running":.*true'; then
     echo "Starting podman machine: $machine"
-    "$ENGINE" machine start "$machine" 2>/dev/null || true
+    local start_output
+    start_output=$("$ENGINE" machine start "$machine" 2>&1) || true
+    echo "$start_output"
+    
     # Re-check: if still not running after start attempt, fail.
+    sleep 2  # Give machine time to start
     if ! "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -q '"Running":.*true'; then
+      echo "Debug: machine inspect output:"
+      "$ENGINE" machine inspect "$machine" 2>&1 | head -20
       echo "Error: podman machine $machine failed to start"
       return 1
     fi
