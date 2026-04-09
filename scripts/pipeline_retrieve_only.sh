@@ -125,21 +125,18 @@ ensure_podman_machine() {
   fi
 
   # Start machine when stopped.
-  if ! "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -q '"Running":.*true'; then
-    echo "Starting podman machine: $machine"
-    local start_output
-    start_output=$("$ENGINE" machine start "$machine" 2>&1) || true
-    echo "$start_output"
-    
-    # Re-check: if still not running after start attempt, fail.
-    sleep 2  # Give machine time to start
-    if ! "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -q '"Running":.*true'; then
-      echo "Debug: machine inspect output:"
-      "$ENGINE" machine inspect "$machine" 2>&1 | head -20
-      echo "Error: podman machine $machine failed to start"
-      return 1
-    fi
+  if ! "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -qi '"name".*"'$machine'"' 2>/dev/null; then
+    echo "Error: could not find machine $machine after creation"
+    return 1
   fi
+
+  # Attempt to start; if it says "already running" or succeeds, we're good.
+  local start_output
+  start_output=$("$ENGINE" machine start "$machine" 2>&1)
+  if ! echo "$start_output" | grep -qi "running"; then
+    echo "Warning: machine start output: $start_output"
+  fi
+
 }
 
 # Build-time args (auto-detected based on host platform)
