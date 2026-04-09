@@ -124,12 +124,17 @@ ensure_podman_machine() {
     fi
   fi
 
-  # Start the machine (succeeds if running, already running, or starts successfully).
-  "$ENGINE" machine start "$machine" 2>&1 | grep -qi "running\|started" && return 0
+  # Attempt to start machine; ignore "already running" errors.
+  if ! "$ENGINE" machine start "$machine" 2>&1 | grep -qi "already running\|started"; then
+    # Attempt failed and didn't say "already running"; may have started anyway, try a final check.
+    sleep 1
+    if ! "$ENGINE" machine list --format "{{.Name}}" 2>/dev/null | grep -q "$(echo "$machine" | sed 's/\*//')"; then
+      echo "Error: podman machine $machine is not available"
+      return 1
+    fi
+  fi
   
-  # If we get here, start command didn't report running/started; something went wrong.
-  echo "Error: podman machine $machine did not respond to start command"
-  return 1
+  return 0
 }
 
 # Build-time args (auto-detected based on host platform)
