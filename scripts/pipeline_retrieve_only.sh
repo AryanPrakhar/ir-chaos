@@ -127,12 +127,11 @@ ensure_podman_machine() {
   # Start machine when stopped.
   if ! "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -q '"Running":.*true'; then
     echo "Starting podman machine: $machine"
-    if ! "$ENGINE" machine start "$machine" 2>&1 | tee -a "$PIPELINE_LOG" | grep -q "already running"; then
-      # Re-check running status after start attempt; if still not running, fail.
-      if ! "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -q '"Running":.*true'; then
-        echo "Error: failed to start podman machine: $machine"
-        return 1
-      fi
+    "$ENGINE" machine start "$machine" 2>/dev/null || true
+    # Re-check: if still not running after start attempt, fail.
+    if ! "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -q '"Running":.*true'; then
+      echo "Error: podman machine $machine failed to start"
+      return 1
     fi
   fi
 }
