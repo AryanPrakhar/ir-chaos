@@ -101,7 +101,7 @@ ensure_podman_machine() {
   if ! "$ENGINE" machine list --format "{{.Name}}" 2>/dev/null | grep -q .; then
     echo "No podman machine found. Initializing..."
     if [[ "$HOST_OS" == "darwin" ]]; then
-      "$ENGINE" machine init --cpus 4 --memory 8192 --disk-size 100
+      "$ENGINE" machine init --cpus 4 --memory 8192 --disk-size 10
     else
       "$ENGINE" machine init
     fi
