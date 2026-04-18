@@ -7,8 +7,9 @@ import os
 import time
 import logging
 import math
+from collections import OrderedDict
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -39,8 +40,10 @@ LLAMA_GPU_LAYERS = int(os.environ.get("LLAMA_GPU_LAYERS", str(DEFAULT_LLAMA_GPU_
 RETRIEVE_K = int(os.environ.get("RETRIEVE_K", "10"))
 RERANK_K = int(os.environ.get("RERANK_K", "5"))
 FORCE_REINDEX = os.environ.get("FORCE_REINDEX", "false").lower() == "true"
+QUERY_CACHE_SIZE = int(os.environ.get("RETRIEVER_QUERY_CACHE_SIZE", "256"))
 
 ranker = None
+query_cache: "OrderedDict[Tuple[str, int, int], List[dict]]" = OrderedDict()
 
 
 class ChatMessage(BaseModel):
@@ -104,6 +107,26 @@ class CompactQueryResponse(BaseModel):
     results: List[dict] = []
 
 
+class RetrieveRequest(BaseModel):
+    query: str
+    retrieve_k: Optional[int] = None
+    rerank_k: Optional[int] = None
+    verbose: Optional[bool] = False
+
+
+class RetrieveResult(BaseModel):
+    rank: int
+    id: str
+    name: str
+    relevance: float
+
+
+class RetrieveResponse(BaseModel):
+    results: List[RetrieveResult]
+    search_time_ms: int
+    debug: Optional[dict] = None
+
+
 def _sigmoid(value: float) -> float:
     if value >= 0:
         z = math.exp(-value)
@@ -149,12 +172,59 @@ def _extract_user_query(messages: List[ChatMessage]) -> str:
     return ""
 
 
+def _normalize_relevance(results: List[dict]) -> List[float]:
+    if not results:
+        return []
+
+    raw_scores = [
+        float(item.get("final_score", item.get("retrieval_score", 0.0)))
+        for item in results
+    ]
+    low = min(raw_scores)
+    high = max(raw_scores)
+
+    if high == low:
+        base = 1.0 if high > 0 else 0.0
+        return [base for _ in raw_scores]
+
+    return [(score - low) / (high - low) for score in raw_scores]
+
+
+def _cache_get(cache_key: Tuple[str, int, int]) -> Optional[List[dict]]:
+    cached = query_cache.get(cache_key)
+    if cached is None:
+        return None
+    query_cache.move_to_end(cache_key)
+    return [dict(row) for row in cached]
+
+
+def _cache_put(cache_key: Tuple[str, int, int], results: List[dict]) -> None:
+    query_cache[cache_key] = [dict(row) for row in results]
+    query_cache.move_to_end(cache_key)
+    while len(query_cache) > QUERY_CACHE_SIZE:
+        query_cache.popitem(last=False)
+
+
+def _rank_with_cache(query: str, retrieve_k: int, rerank_k: int) -> tuple[List[dict], int, bool]:
+    cache_key = (query, retrieve_k, rerank_k)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached, 0, True
+
+    started = time.perf_counter()
+    results = ranker.find_match(query, retrieve_k=retrieve_k, rerank_k=rerank_k)
+    elapsed_ms = int(round((time.perf_counter() - started) * 1000))
+    _cache_put(cache_key, results)
+    return results, elapsed_ms, False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global ranker
 
     logger.info("Starting krkn-retriever FastAPI service")
     reset_ranker()
+    query_cache.clear()
     ranker = get_ranker(
         device_preference=DEVICE,
         cpu_only=CPU_ONLY,
@@ -169,6 +239,13 @@ async def lifespan(app: FastAPI):
         ranker._load_index()
     else:
         logger.info("Using existing FAISS index")
+
+    # Warm all heavyweight resources once at startup.
+    if hasattr(ranker, "_init_models"):
+        ranker._init_models()
+    if hasattr(ranker, "_load_doc_texts"):
+        ranker._load_doc_texts()
+    logger.info("Retriever warmup complete (cache size=%d)", QUERY_CACHE_SIZE)
 
     yield
 
@@ -192,6 +269,7 @@ async def root():
         "rerank_k": RERANK_K,
         "endpoints": {
             "health": "/health",
+            "retrieve": "/retrieve",
             "chat_completions": "/v1/chat/completions",
             "legacy_query": "/query",
         },
@@ -224,11 +302,9 @@ async def chat_completions(request: QueryRequest):
     k_retrieve = request.retrieve_k or RETRIEVE_K
     k_rerank = request.rerank_k or RERANK_K
 
-    started = time.time()
-    results = ranker.find_match(query, retrieve_k=k_retrieve, rerank_k=k_rerank)
+    results, elapsed_ms, cache_hit = _rank_with_cache(query, k_retrieve, k_rerank)
     results = _with_display_scores(results)
-    elapsed = time.time() - started
-    logger.info("query_time=%.3fs query=%s", elapsed, query[:120])
+    logger.info("query_time_ms=%d cache_hit=%s query=%s", elapsed_ms, cache_hit, query[:120])
 
     clear = _clear_answers(results)
     scenario_names = [row["id"] for row in clear]
@@ -272,10 +348,10 @@ async def legacy_query(request: ScenarioQueryRequest):
     if ranker is None:
         raise HTTPException(status_code=503, detail="Retriever not initialized")
 
-    results = ranker.find_match(
+    results, _, _ = _rank_with_cache(
         request.query,
-        retrieve_k=request.retrieve_k or RETRIEVE_K,
-        rerank_k=request.rerank_k or RERANK_K,
+        request.retrieve_k or RETRIEVE_K,
+        request.rerank_k or RERANK_K,
     )
     results = _with_display_scores(results)
     clear = _clear_answers(results)
@@ -294,10 +370,10 @@ async def compact_query(request: ScenarioQueryRequest):
     if ranker is None:
         raise HTTPException(status_code=503, detail="Retriever not initialized")
 
-    results = ranker.find_match(
+    results, _, _ = _rank_with_cache(
         request.query,
-        retrieve_k=request.retrieve_k or RETRIEVE_K,
-        rerank_k=request.rerank_k or RERANK_K,
+        request.retrieve_k or RETRIEVE_K,
+        request.rerank_k or RERANK_K,
     )
     results = _with_display_scores(results)
     clear = _clear_answers(results)
@@ -315,6 +391,49 @@ async def compact_query(request: ScenarioQueryRequest):
         scenario_names=scenario_names,
         clear_answers=clear,
         results=results,
+    )
+
+
+@app.post("/retrieve", response_model=RetrieveResponse)
+async def retrieve(request: RetrieveRequest):
+    if ranker is None:
+        raise HTTPException(status_code=503, detail="Retriever not initialized")
+
+    query = request.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    results, elapsed_ms, cache_hit = _rank_with_cache(
+        query,
+        request.retrieve_k or RETRIEVE_K,
+        request.rerank_k or RERANK_K,
+    )
+    relevance = _normalize_relevance(results)
+
+    normalized = [
+        RetrieveResult(
+            rank=index + 1,
+            id=row["id"],
+            name=row.get("name", row["id"]),
+            relevance=round(max(0.0, min(1.0, relevance[index])), 3),
+        )
+        for index, row in enumerate(results)
+    ]
+
+    debug = None
+    if request.verbose and results:
+        debug = {
+            "retrieval_candidates": len(results),
+            "reranked_count": len(results),
+            "faiss_top_score": float(results[0].get("retrieval_score", 0.0)),
+            "reranker_top_score": float(results[0].get("score", 0.0)),
+            "cache_hit": cache_hit,
+        }
+
+    return RetrieveResponse(
+        results=normalized,
+        search_time_ms=elapsed_ms,
+        debug=debug,
     )
 
 
