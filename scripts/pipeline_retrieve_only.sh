@@ -434,7 +434,7 @@ import sys
 
 payload = {
     "query": sys.argv[1],
-    "retrieve_k": int(sys.argv[2]),
+    "k": int(sys.argv[2]),
     "rerank_k": int(sys.argv[3]),
 }
 print(json.dumps(payload))
@@ -442,7 +442,7 @@ PY
 )"
 
   if ! curl -fsS \
-    -X POST "$API_BASE_URL/query" \
+    -X POST "$API_BASE_URL/retrieve" \
     -H "Content-Type: application/json" \
     -d "$request_json" \
     >"$SHARED_DIR/retrieval_output.json" 2>>"$QUERY_LOG"; then
@@ -484,8 +484,6 @@ from pathlib import Path
 
 FAISS_GAP = 0.07
 CE_GAP = 1.0
-CONF_CE_WEIGHT = 0.8
-CONF_FAISS_WEIGHT = 0.2
 
 path = Path(sys.argv[1])
 if not path.exists():
@@ -499,22 +497,27 @@ if not results:
     print("  No matching scenario")
     raise SystemExit(0)
 
-def confidence_score(row):
+def final_score(row):
+    if "final_score" in row:
+        return max(0.0, min(1.0, float(row.get("final_score", 0.0))))
+    # Back-compat with older payloads
     ce = float(row.get("score", 0.0))
     faiss = float(row.get("retrieval_score", 0.0))
     ce_sigmoid = 1.0 / (1.0 + math.exp(-ce))
-    blended = (CONF_CE_WEIGHT * ce_sigmoid) + (CONF_FAISS_WEIGHT * max(0.0, min(1.0, faiss)))
-    return max(0.0, min(1.0, blended))
+    return max(0.0, min(1.0, (0.8 * ce_sigmoid) + (0.2 * max(0.0, min(1.0, faiss)))))
+
+def ce_score(row):
+    return float(row.get("rerank_score", row.get("score", 0.0)))
 
 clear_count = 1
 if len(results) >= 2:
     faiss_gap = abs(float(results[0].get("retrieval_score", 0.0)) - float(results[1].get("retrieval_score", 0.0)))
-    ce_gap = abs(float(results[0].get("score", 0.0)) - float(results[1].get("score", 0.0)))
+    ce_gap = abs(ce_score(results[0]) - ce_score(results[1]))
     if faiss_gap < FAISS_GAP or ce_gap < CE_GAP:
         clear_count = 2
 
 best = results[:clear_count]
-all_scores = [confidence_score(r) for r in results]
+all_scores = [final_score(r) for r in results]
 
 def render_bar(score, width=10):
     filled = max(0, min(width, int(round(score * width))))
@@ -783,11 +786,13 @@ if not results:
 def fmt(values):
     return "  ".join(f"{v:>7.4f}" for v in values)
 
-ce_scores = [float(r.get("score", 0.0)) for r in results]
+ce_scores = [float(r.get("rerank_score", r.get("score", 0.0))) for r in results]
 faiss_scores = [float(r.get("retrieval_score", 0.0)) for r in results]
+hybrid_scores = [float(r.get("final_score", 0.0)) for r in results]
 print("")
 print(f"  CE scores:  {fmt(ce_scores)}")
 print(f"  FAISS:      {fmt(faiss_scores)}")
+print(f"  Hybrid:     {fmt(hybrid_scores)}")
 PY
   fi
   echo ""

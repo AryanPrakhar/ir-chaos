@@ -24,7 +24,7 @@ podman run --rm -p 8080:8080 krkn-retriever:fastapi
 ```bash
 curl -s http://127.0.0.1:8080/
 curl -s http://127.0.0.1:8080/health
-curl -s -X POST http://127.0.0.1:8080/v1/chat/completions \
+curl -s -X POST http://127.0.0.1:8080/retrieve \
   -H 'content-type: application/json' \
-  -d '{"model":"krkn-retriever","messages":[{"role":"user","content":"delete all pods in namespace to test recovery"}],"stream":false,"retrieve_k":5,"rerank_k":3}'
+  -d '{"query":"delete all pods in namespace to test recovery","k":5,"rerank_k":3}'
 ```

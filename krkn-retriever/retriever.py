@@ -24,10 +24,17 @@ FINAL_CE_WEIGHT = 0.8
 FINAL_FAISS_WEIGHT = 0.2
 MIN_QUERY_WORDS = 4
 MIN_CE_SCORE = -9.0
+MIN_MATCH_SCORE = float(os.environ.get("MIN_MATCH_SCORE", "0.10"))
 RETRIEVER_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 DEFAULT_BACKEND = os.environ.get("RETRIEVER_BACKEND", "auto")
 DEFAULT_LLAMA_MODEL = os.environ.get("LLAMA_EMBED_MODEL", "")
 DEFAULT_LLAMA_GPU_LAYERS = int(os.environ.get("LLAMA_GPU_LAYERS", "-1"))
+
+
+def score_to_match(ce_score: float, faiss_score: float) -> float:
+    ce_sigmoid = 1.0 / (1.0 + np.exp(-float(ce_score)))
+    faiss = max(0.0, min(1.0, float(faiss_score)))
+    return (FINAL_CE_WEIGHT * ce_sigmoid) + (FINAL_FAISS_WEIGHT * faiss)
 
 
 def cuda_runtime_works():
@@ -275,9 +282,20 @@ class CrossEncoderRanker:
             })
 
         for row in results:
-            row["final_score"] = (FINAL_CE_WEIGHT * row["score"]) + (FINAL_FAISS_WEIGHT * row["retrieval_score"])
+            row["final_score"] = score_to_match(row["score"], row["retrieval_score"])
 
         results_sorted = sorted(results, key=lambda x: x["final_score"], reverse=True)
+        top_match = score_to_match(
+            results_sorted[0]["score"],
+            results_sorted[0]["retrieval_score"],
+        )
+        if top_match < MIN_MATCH_SCORE:
+            print(
+                f"No matching scenarios (top match score {top_match:.3f} < {MIN_MATCH_SCORE:.2f})."
+            )
+            total_ms = (time.perf_counter() - search_start) * 1000
+            print(f"Timing: retrieval={retrieval_ms:.1f}ms | rerank={rerank_ms:.1f}ms | total={total_ms:.1f}ms")
+            return []
         if len(results_sorted) >= 2:
             faiss_gap = abs(results_sorted[0]["retrieval_score"] - results_sorted[1]["retrieval_score"])
             ce_gap = abs(results_sorted[0]["score"] - results_sorted[1]["score"])
@@ -470,13 +488,26 @@ class LlamaVulkanRanker:
                     "retrieval_score": candidates[i]["retrieval_score"],
                 })
             for row in results:
-                row["final_score"] = (FINAL_CE_WEIGHT * row["score"]) + (FINAL_FAISS_WEIGHT * row["retrieval_score"])
+                row["final_score"] = score_to_match(row["score"], row["retrieval_score"])
             results = sorted(results, key=lambda x: x["final_score"], reverse=True)
         except Exception as exc:
             print(f"Reranker failed on backend={self.rerank_device}, falling back to cosine scores: {exc}")
             results = sorted(candidates, key=lambda x: x["retrieval_score"], reverse=True)
             for row in results:
                 row["final_score"] = row["retrieval_score"]
+
+        if results:
+            top_match = score_to_match(
+                results[0]["score"],
+                results[0]["retrieval_score"],
+            )
+            if top_match < MIN_MATCH_SCORE:
+                print(
+                    f"No matching scenarios (top match score {top_match:.3f} < {MIN_MATCH_SCORE:.2f})."
+                )
+                total_ms = (time.perf_counter() - search_start) * 1000
+                print(f"Timing: retrieval={retrieval_ms:.1f}ms | rerank={rerank_ms:.1f}ms | total={total_ms:.1f}ms")
+                return []
 
         if len(results) >= 2:
             faiss_gap = abs(results[0]["retrieval_score"] - results[1]["retrieval_score"])

@@ -109,22 +109,25 @@ class CompactQueryResponse(BaseModel):
 
 class RetrieveRequest(BaseModel):
     query: str
+    k: Optional[int] = None
     retrieve_k: Optional[int] = None
     rerank_k: Optional[int] = None
-    verbose: Optional[bool] = False
 
 
 class RetrieveResult(BaseModel):
-    rank: int
     id: str
     name: str
-    relevance: float
+    retrieval_score: float
+    rerank_score: float
+    final_score: float
+    score_percent: float
 
 
 class RetrieveResponse(BaseModel):
+    query: str
     results: List[RetrieveResult]
-    search_time_ms: int
-    debug: Optional[dict] = None
+    top_match: Optional[str] = None
+    message: str
 
 
 def _sigmoid(value: float) -> float:
@@ -136,10 +139,13 @@ def _sigmoid(value: float) -> float:
 
 
 def _display_score(row: dict) -> float:
+    if "final_score" in row:
+        return max(0.0, min(1.0, float(row.get("final_score", 0.0))))
+    # Back-compat for older payloads without final_score
     ce = float(row.get("score", 0.0))
     faiss = max(0.0, min(1.0, float(row.get("retrieval_score", 0.0))))
-    blended = (FINAL_CE_WEIGHT * _sigmoid(ce)) + (FINAL_FAISS_WEIGHT * faiss)
-    return max(0.0, min(1.0, blended))
+    ce_sigmoid = 1.0 / (1.0 + math.exp(-ce))
+    return (FINAL_CE_WEIGHT * ce_sigmoid) + (FINAL_FAISS_WEIGHT * faiss)
 
 
 def _with_display_scores(results: List[dict]) -> List[dict]:
@@ -270,7 +276,7 @@ async def root():
         "endpoints": {
             "health": "/health",
             "retrieve": "/retrieve",
-            "chat_completions": "/v1/chat/completions",
+            "chat_completions_legacy": "/v1/chat/completions",
             "legacy_query": "/query",
         },
     }
@@ -403,37 +409,41 @@ async def retrieve(request: RetrieveRequest):
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
+    k_retrieve = request.k or request.retrieve_k or RETRIEVE_K
+    k_rerank = request.rerank_k or RERANK_K
     results, elapsed_ms, cache_hit = _rank_with_cache(
         query,
-        request.retrieve_k or RETRIEVE_K,
-        request.rerank_k or RERANK_K,
+        k_retrieve,
+        k_rerank,
     )
-    relevance = _normalize_relevance(results)
-
-    normalized = [
+    clean_results = [
         RetrieveResult(
-            rank=index + 1,
             id=row["id"],
             name=row.get("name", row["id"]),
-            relevance=round(max(0.0, min(1.0, relevance[index])), 3),
+            retrieval_score=round(float(row.get("retrieval_score", 0.0)), 4),
+            rerank_score=round(float(row.get("score", 0.0)), 4),
+            final_score=round(_display_score(row), 4),
+            score_percent=round(_display_score(row) * 100.0, 1),
         )
-        for index, row in enumerate(results)
+        for row in results
     ]
-
-    debug = None
-    if request.verbose and results:
-        debug = {
-            "retrieval_candidates": len(results),
-            "reranked_count": len(results),
-            "faiss_top_score": float(results[0].get("retrieval_score", 0.0)),
-            "reranker_top_score": float(results[0].get("score", 0.0)),
-            "cache_hit": cache_hit,
-        }
+    top_match = clean_results[0].id if clean_results else None
+    if clean_results:
+        message = f"Found {len(clean_results)} relevant scenarios"
+    else:
+        message = "No matching chaos scenarios found"
+    logger.info(
+        "retrieve_time_ms=%d cache_hit=%s query=%s",
+        elapsed_ms,
+        cache_hit,
+        query[:120],
+    )
 
     return RetrieveResponse(
-        results=normalized,
-        search_time_ms=elapsed_ms,
-        debug=debug,
+        query=query,
+        results=clean_results,
+        top_match=top_match,
+        message=message,
     )
 
 
