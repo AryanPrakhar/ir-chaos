@@ -31,7 +31,7 @@ for arg in "$@"; do
     *) POSITIONAL_ARGS+=("$arg") ;;
   esac
 done
-set -- "${POSITIONAL_ARGS[@]}"
+set -- "${POSITIONAL_ARGS[@]+"${POSITIONAL_ARGS[@]}"}"
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 \"<query>\" [retrieve-k] [rerank-k] [--verbose]"
