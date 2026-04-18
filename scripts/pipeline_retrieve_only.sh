@@ -24,6 +24,7 @@ set -euo pipefail
 #   retrieval container writes ./shared/retrieval_output.json
 
 VERBOSE=0
+INTERACTIVE=0
 POSITIONAL_ARGS=()
 for arg in "$@"; do
   case "$arg" in
@@ -33,17 +34,13 @@ for arg in "$@"; do
 done
 set -- "${POSITIONAL_ARGS[@]+"${POSITIONAL_ARGS[@]}"}"
 
-if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 \"<query>\" [retrieve-k] [rerank-k] [--verbose]"
-  echo "Defaults: retrieve-k=10, rerank-k=5"
-  echo "Optional: --verbose"
-  echo "Optional env: RETRIEVER_ACCELERATION=auto|gpu|cpu RETRIEVER_FORCE_BUILD=1"
-  exit 1
-fi
-
-QUERY="$1"
+QUERY="${1:-}"
 RETRIEVE_K="${2:-10}"
 RERANK_K="${3:-5}"
+
+if [[ -z "$QUERY" ]]; then
+  INTERACTIVE=1
+fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SHARED_DIR="$ROOT_DIR/shared"
@@ -442,32 +439,69 @@ vlog ""
 vlog "[3/3] Running retrieval and reranking query"
 STEP_START_MS="$(now_ms)"
 QUERY_LOG="$(mktemp)"
-if [[ "$VERBOSE" == "1" ]]; then
-  if ! run_retriever_python \
-  -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
-  -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
-  -v "$SHARED_DIR:/io$MOUNT_LABEL_SUFFIX" \
-  -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
-  -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
-  -e DOCS_DIR=/app/docs \
-  -e RETRIEVER_BACKEND="$BACKEND" \
-  -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
-  -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
-  -e HF_HOME=/root/.cache/huggingface \
-  -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
-  -e TORCH_HOME=/root/.cache/torch \
-  -w /app \
-  "$IMAGE" \
-  retriever.py "${DEVICE_ARGS[@]}" query "$QUERY" \
-    --retrieve-k "$RETRIEVE_K" \
-      --rerank-k "$RERANK_K" \
-      --non-interactive \
-      --export /io/retrieval_output.json \
-      --include-text >"$QUERY_LOG" 2>&1; then
-    echo "Error: retrieval query failed."
-    cat "$QUERY_LOG"
-    exit 1
+
+if [[ "$INTERACTIVE" == "1" ]]; then
+  if [[ "$VERBOSE" == "1" ]]; then
+    run_retriever_python \
+      -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
+      -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
+      -e DOCS_DIR=/app/docs \
+      -e RETRIEVER_BACKEND="$BACKEND" \
+      -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
+      -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
+      -e HF_HOME=/root/.cache/huggingface \
+      -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
+      -e TORCH_HOME=/root/.cache/torch \
+      -w /app \
+      "$IMAGE" \
+      retriever.py "${DEVICE_ARGS[@]}" query \
+        --retrieve-k "$RETRIEVE_K" \
+        --rerank-k "$RERANK_K" \
+        --interactive
+  else
+    run_retriever_python \
+      -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
+      -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
+      -e DOCS_DIR=/app/docs \
+      -e RETRIEVER_BACKEND="$BACKEND" \
+      -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
+      -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
+      -e HF_HOME=/root/.cache/huggingface \
+      -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
+      -e TORCH_HOME=/root/.cache/torch \
+      -w /app \
+      "$IMAGE" \
+      retriever.py "${DEVICE_ARGS[@]}" query \
+        --retrieve-k "$RETRIEVE_K" \
+        --rerank-k "$RERANK_K" \
+        --interactive
   fi
+elif [[ "$VERBOSE" == "1" ]]; then
+  if ! run_retriever_python \
+   -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
+   -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
+   -v "$SHARED_DIR:/io$MOUNT_LABEL_SUFFIX" \
+   -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
+   -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
+   -e DOCS_DIR=/app/docs \
+   -e RETRIEVER_BACKEND="$BACKEND" \
+   -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
+   -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
+   -e HF_HOME=/root/.cache/huggingface \
+   -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
+   -e TORCH_HOME=/root/.cache/torch \
+   -w /app \
+   "$IMAGE" \
+   retriever.py "${DEVICE_ARGS[@]}" query "$QUERY" \
+     --retrieve-k "$RETRIEVE_K" \
+       --rerank-k "$RERANK_K" \
+       --non-interactive \
+       --export /io/retrieval_output.json \
+       --include-text >"$QUERY_LOG" 2>&1; then
+     echo "Error: retrieval query failed."
+     cat "$QUERY_LOG"
+     exit 1
+   fi
 else
   if ! run_retriever_python \
     -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
@@ -502,19 +536,20 @@ vlog "      Step time: ${QUERY_MS}ms"
 TOTAL_END_MS="$(now_ms)"
 TOTAL_MS="$((TOTAL_END_MS - TOTAL_START_MS))"
 
-DOC_COUNT="$(index_doc_count)"
-OUTPUT_PATH="$SHARED_DIR/retrieval_output.json"
-SECONDS_DISPLAY="$(python3 - "$QUERY_MS" <<'PY'
+if [[ "$INTERACTIVE" == "0" ]]; then
+  DOC_COUNT="$(index_doc_count)"
+  OUTPUT_PATH="$SHARED_DIR/retrieval_output.json"
+  SECONDS_DISPLAY="$(python3 - "$QUERY_MS" <<'PY'
 import sys
 ms = int(sys.argv[1])
 print(f"{ms/1000.0:.1f}")
 PY
 )"
 
-echo ""
-echo "  Searching ${DOC_COUNT} scenarios...  done in ${SECONDS_DISPLAY}s"
-echo ""
-python3 - "$OUTPUT_PATH" <<'PY'
+  echo ""
+  echo "  Searching ${DOC_COUNT} scenarios...  done in ${SECONDS_DISPLAY}s"
+  echo ""
+  python3 - "$OUTPUT_PATH" <<'PY'
 import json
 import math
 import sys
@@ -582,8 +617,9 @@ if rest:
         print(f"     {offset:<2} {name} {bar}   {score:0.4f}")
 PY
 
-echo ""
-echo "  Results -> $OUTPUT_PATH"
+  echo ""
+  echo "  Results -> $OUTPUT_PATH"
+fi
 
 if [[ "$VERBOSE" == "1" ]]; then
   echo ""
