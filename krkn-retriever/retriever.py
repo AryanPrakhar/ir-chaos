@@ -595,7 +595,8 @@ def main():
     query_parser.add_argument("query", nargs="?")
     query_parser.add_argument("--retrieve-k", type=int, default=10, help="FAISS candidate pool size (default: 10)")
     query_parser.add_argument("--rerank-k", type=int, default=5, help="Top results after Cross-Encoder reranking (default: 5)")
-    query_parser.add_argument("--interactive", "-i", action="store_true")
+    query_parser.add_argument("--interactive", "-i", action="store_true", default=True)
+    query_parser.add_argument("--non-interactive", action="store_false", dest="interactive")
     query_parser.add_argument("--export", default=None, help="Write query + top results to JSON (for inference handoff)")
     query_parser.add_argument("--include-text", action="store_true", help="Include full scenario text in exported JSON")
 
@@ -612,7 +613,7 @@ def main():
     if args.cmd == "index":
         ranker.build_index(args.docs)
     elif args.cmd == "query":
-        if args.interactive:
+        if args.interactive and not args.query:
             print("\nInteractive Query Mode (type 'exit' or 'quit' to end)\n")
             while True:
                 q = input("Query: ").strip()
@@ -631,6 +632,9 @@ def main():
             display_results(res[:5])
             if args.export:
                 export_results(args.query, res, args.export, ranker, include_text=args.include_text)
+        elif not args.query:
+            print("\nNo query provided. Use --non-interactive or provide a query.")
+            parser.print_help()
 
 if __name__ == "__main__":
     main()

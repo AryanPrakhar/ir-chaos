@@ -41,6 +41,8 @@ RUN if [ "$GGML_BACKEND" = "vulkan" ]; then \
 # ── PyTorch CPU + ML dependencies ──
 RUN pip install torch --index-url https://download.pytorch.org/whl/cpu && \
     pip install \
+      fastapi \
+      uvicorn \
       transformers==4.52.4 \
       huggingface_hub[cli] \
       sentence-transformers \

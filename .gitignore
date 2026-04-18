@@ -5,6 +5,7 @@ krkn-retriever/venv
 # Local Claude/Copilot context and notes
 .claude/
 claude.md
+venv
 
 # Local environment and key material
 .env

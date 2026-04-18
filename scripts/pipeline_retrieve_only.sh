@@ -461,6 +461,7 @@ if [[ "$VERBOSE" == "1" ]]; then
   retriever.py "${DEVICE_ARGS[@]}" query "$QUERY" \
     --retrieve-k "$RETRIEVE_K" \
       --rerank-k "$RERANK_K" \
+      --non-interactive \
       --export /io/retrieval_output.json \
       --include-text >"$QUERY_LOG" 2>&1; then
     echo "Error: retrieval query failed."
@@ -486,6 +487,7 @@ else
     retriever.py "${DEVICE_ARGS[@]}" query "$QUERY" \
       --retrieve-k "$RETRIEVE_K" \
       --rerank-k "$RERANK_K" \
+      --non-interactive \
       --export /io/retrieval_output.json \
       --include-text >"$QUERY_LOG" 2>&1; then
     echo "Error: retrieval query failed."
