@@ -73,7 +73,7 @@ RETRIEVER_DOCKERFILE=./Dockerfile RETRIEVER_FORCE_BUILD=1 ./scripts/pipeline_ret
 ## Manual Workflow (without pipeline script)
 
 ```bash
-podman build -t krkn-retriever:v1 -f ./krkn-retriever/Dockerfile .
+podman build -t krkn-retriever:fastapi -f ./krkn-retriever/Dockerfile .
 ```
 
 ```bash
@@ -82,7 +82,7 @@ podman run -it --rm \
   -v ./docs:/app/docs:Z \
   -v ~/.cache/huggingface:/root/.cache/huggingface:Z \
   -e DOCS_DIR=/app/docs \
-  krkn-retriever:v1 bash
+  krkn-retriever:fastapi bash
 ```
 
 Inside container:

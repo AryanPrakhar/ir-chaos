@@ -10,13 +10,13 @@ uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
 ## Build
 
 ```bash
-podman build -t localhost/krkn-retriever:fastapi -f krkn-retriever/Dockerfile .
+podman build -t krkn-retriever:fastapi -f krkn-retriever/Dockerfile .
 ```
 
 ## Run
 
 ```bash
-podman run --rm -p 8080:8080 localhost/krkn-retriever:fastapi
+podman run --rm -p 8080:8080 krkn-retriever:fastapi
 ```
 
 ## Quick test

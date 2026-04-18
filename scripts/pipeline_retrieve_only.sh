@@ -10,7 +10,7 @@ set -euo pipefail
 #
 # Optional environment variables:
 #   CONTAINER_ENGINE=podman|docker
-#   RETRIEVER_IMAGE=krkn-retriever:v1
+#   RETRIEVER_IMAGE=krkn-retriever:fastapi
 #   RETRIEVER_DOCKERFILE=/path/to/Dockerfile
 #   RETRIEVER_BACKEND=auto|torch|vulkan
 #   RETRIEVER_ACCELERATION=auto|gpu|cpu
@@ -51,7 +51,7 @@ META_FILE="$ROOT_DIR/krkn-retriever/faiss-index/krkn-scenarios.meta"
 HF_CACHE_DIR="${HF_CACHE_DIR:-$ROOT_DIR/.cache/huggingface}"
 TORCH_CACHE_DIR="${TORCH_CACHE_DIR:-$ROOT_DIR/.cache/torch}"
 ENGINE="${CONTAINER_ENGINE:-podman}"
-IMAGE="${RETRIEVER_IMAGE:-krkn-retriever:v1}"
+IMAGE="${RETRIEVER_IMAGE:-krkn-retriever:fastapi}"
 DOCKERFILE="${RETRIEVER_DOCKERFILE:-$ROOT_DIR/krkn-retriever/Dockerfile}"
 FORCE_BUILD="${RETRIEVER_FORCE_BUILD:-0}"
 BACKEND="${RETRIEVER_BACKEND:-auto}"
