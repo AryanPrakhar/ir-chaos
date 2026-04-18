@@ -17,11 +17,30 @@ curl -s http://127.0.0.1:8080/
 curl -s http://127.0.0.1:8080/health
 ```
 
-**4. Query it**
+**4. Query it (primary endpoint)**
 ```bash
-curl -s -X POST http://127.0.0.1:8080/v1/chat/completions \
+curl -s -X POST http://127.0.0.1:8080/retrieve \
   -H 'content-type: application/json' \
-  -d '{"model":"krkn-retriever","messages":[{"role":"user","content":"delete all pods in namespace to test restart behavior"}],"stream":false,"retrieve_k":5,"rerank_k":3}'
+  -d '{"query":"delete all pods in namespace to test restart behavior","k":5,"rerank_k":3}'
+```
+
+Example response:
+```json
+{
+  "query": "delete all pods in namespace to test restart behavior",
+  "results": [
+    {
+      "id": "pod-scenarios",
+      "name": "Pod Scenarios",
+      "retrieval_score": 0.7128,
+      "rerank_score": -7.5341,
+      "final_score": 0.143,
+      "score_percent": 14.3
+    }
+  ],
+  "top_match": "pod-scenarios",
+  "message": "Found 1 relevant scenarios"
+}
 ```
 
 **5. Run the pipeline with the same image**

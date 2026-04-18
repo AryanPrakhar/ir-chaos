@@ -98,3 +98,13 @@ Benchmark:
 ```bash
 python3 benchmark_retriever.py --dataset data.csv --retrieve-k 10 --rerank-k 5
 ```
+
+
+
+-----------
+
+
+
+curl -sS -X POST http://127.0.0.1:18080/retrieve \
+  -H 'content-type: application/json' \
+  -d '{"query":"kill the pods right now","k":10,"rerank_k":5}' | python3 -m json.tool
