@@ -2,9 +2,11 @@
 set -euo pipefail
 
 # Retrieval-only pipeline: retrieves and reranks results without inference
+# CROSS-PLATFORM: Linux (native podman) + macOS (podman machine + libkrun)
 #
 # Usage:
-#   ./scripts/pipeline_retrieve_only.sh "your query" [retrieve-k] [rerank-k] [--verbose]
+#   ./scripts/pipeline_retrieve_only.sh [query] [retrieve-k] [rerank-k] [--verbose]
+#   (No query starts interactive mode)
 #
 # Optional environment variables:
 #   CONTAINER_ENGINE=podman|docker
@@ -87,38 +89,32 @@ if ! command -v "$ENGINE" >/dev/null 2>&1; then
 fi
 
 ensure_podman_machine() {
+  # Linux podman is native: no podman machine management needed.
   [[ "$ENGINE" == "podman" ]] || return 0
+  [[ "$HOST_OS" == "darwin" ]] || return 0
 
-  # Ensure provider for macOS Vulkan path.
-  if [[ "$HOST_OS" == "darwin" ]]; then
-    export CONTAINERS_MACHINE_PROVIDER="${CONTAINERS_MACHINE_PROVIDER:-libkrun}"
-  fi
+  # macOS only: ensure provider for Vulkan path.
+  export CONTAINERS_MACHINE_PROVIDER="${CONTAINERS_MACHINE_PROVIDER:-libkrun}"
 
   # Create machine if missing.
   if ! "$ENGINE" machine list --format "{{.Name}}" 2>/dev/null | grep -q .; then
-    echo "No podman machine found. Initializing..."
-    if [[ "$HOST_OS" == "darwin" ]]; then
-      "$ENGINE" machine init --cpus 4 --memory 8192 --disk-size 10
-    else
-      "$ENGINE" machine init
-    fi
+    echo "No podman machine found. Initializing with libkrun provider..."
+    "$ENGINE" machine init --cpus 4 --memory 8192 --disk-size 100
   fi
 
   local machine
-  machine=$("$ENGINE" machine list --format "{{.Name}}" | head -n1 | tr -d '*')
+  machine=$("$ENGINE" machine list --format "{{.Name}}" 2>/dev/null | head -n1 | tr -d '*') || true
   if [[ -z "$machine" ]]; then
     echo "Error: could not determine podman machine name"
     return 1
   fi
 
-  # On macOS, recreate applehv machine so Vulkan can use libkrun path.
-  if [[ "$HOST_OS" == "darwin" ]]; then
-    if "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -qi "applehv"; then
-      echo "Recreating podman machine with libkrun (required for Vulkan): $machine"
-      "$ENGINE" machine rm -f "$machine"
-      "$ENGINE" machine init --cpus 4 --memory 8192 --disk-size 100
-      machine=$("$ENGINE" machine list --format "{{.Name}}" | head -n1 | tr -d '*')
-    fi
+  # Recreate applehv machine so Vulkan can use libkrun path.
+  if "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -qi "applehv"; then
+    echo "Recreating podman machine with libkrun (required for Vulkan on macOS): $machine"
+    "$ENGINE" machine rm -f "$machine"
+    "$ENGINE" machine init --cpus 4 --memory 8192 --disk-size 100
+    machine=$("$ENGINE" machine list --format "{{.Name}}" 2>/dev/null | head -n1 | tr -d '*') || true
   fi
 
   # Attempt to start machine; ignore "already running" errors.
@@ -126,7 +122,7 @@ ensure_podman_machine() {
     # Attempt failed and didn't say "already running"; may have started anyway, try a final check.
     sleep 1
     if ! "$ENGINE" machine list --format "{{.Name}}" 2>/dev/null | grep -q "$(echo "$machine" | sed 's/\*//')"; then
-      echo "Error: podman machine $machine is not available"
+      echo "Error: podman machine $machine failed to start"
       return 1
     fi
   fi
@@ -283,7 +279,43 @@ configure_acceleration() {
     return
   fi
 
-  # Everything else: CPU only
+  if [[ "$HOST_OS" == "linux" ]]; then
+    # Try NVIDIA runtime
+    if nvidia_runtime_available 2>/dev/null; then
+      if gpu_runtime_supported 2>/dev/null; then
+        GGML_BACKEND_DESIRED="cuda"
+        BUILD_ARGS+=(--build-arg GGML_BACKEND=cuda)
+        GPU_RUNTIME_KIND="nvidia-cuda"
+        GPU_FLAGS=(--device nvidia.com/gpu=all --security-opt=label=disable)
+        DEVICE_ARGS=(--device cuda)
+        return
+      fi
+    fi
+
+    # Try AMD ROCm
+    if [[ -e /dev/kfd ]]; then
+      GGML_BACKEND_DESIRED="rocm"
+      BUILD_ARGS+=(--build-arg GGML_BACKEND=rocm)
+      GPU_RUNTIME_KIND="amd-rocm"
+      GPU_FLAGS=(--device /dev/kfd --device /dev/dri --group-add keep-groups)
+      DEVICE_ARGS=(--device auto)
+      return
+    fi
+
+    # Try Intel/DRI Vulkan path
+    if [[ -e /dev/dri/renderD128 || -e /dev/dri/card0 ]]; then
+      if podman_dri_runtime_supported 2>/dev/null; then
+        GGML_BACKEND_DESIRED="vulkan"
+        BUILD_ARGS+=(--build-arg GGML_BACKEND=vulkan)
+        GPU_RUNTIME_KIND="intel-vulkan"
+        GPU_FLAGS=(--device /dev/dri)
+        DEVICE_ARGS=(--device auto)
+        return
+      fi
+    fi
+  fi
+
+  # Fallback: CPU only
   GGML_BACKEND_DESIRED="cpu"
   BUILD_ARGS+=(--build-arg GGML_BACKEND=cpu)
 }
@@ -304,6 +336,14 @@ run_engine() {
   fi
 }
 
+run_engine_interactive() {
+  if [[ -n "${GPU_FLAGS+x}" ]] && [[ ${#GPU_FLAGS[@]} -gt 0 ]]; then
+    "$ENGINE" run --rm -it "${GPU_FLAGS[@]}" "$@"
+  else
+    "$ENGINE" run --rm -it "$@"
+  fi
+}
+
 run_retriever_python() {
   local run_args=(--entrypoint python3)
   if [[ -n "${LLAMA_MOUNT_ARGS+x}" ]] && [[ ${#LLAMA_MOUNT_ARGS[@]} -gt 0 ]]; then
@@ -312,14 +352,27 @@ run_retriever_python() {
   run_engine "${run_args[@]}" "$@"
 }
 
+run_retriever_python_interactive() {
+  local run_args=(--entrypoint python3)
+  if [[ -n "${LLAMA_MOUNT_ARGS+x}" ]] && [[ ${#LLAMA_MOUNT_ARGS[@]} -gt 0 ]]; then
+    run_args+=("${LLAMA_MOUNT_ARGS[@]}")
+  fi
+  run_engine_interactive "${run_args[@]}" "$@"
+}
+
 # ── Setup ──
 
 mkdir -p "$SHARED_DIR" "$HF_CACHE_DIR" "$TORCH_CACHE_DIR"
 
-# macOS: use llama.cpp (vulkan backend) for Vulkan GPU acceleration
-if [[ "$BACKEND" == "auto" && ( "$HOST_OS" == "darwin" || "$HOST_OS" == "macos" ) ]]; then
-  BACKEND="vulkan"
-  vlog "macOS detected; using llama.cpp backend for Vulkan acceleration"
+# Platform-specific backend defaults
+if [[ "$BACKEND" == "auto" ]]; then
+  if [[ "$HOST_OS" == "darwin" || "$HOST_OS" == "macos" ]]; then
+    BACKEND="vulkan"
+    vlog "macOS detected; using llama.cpp backend for Vulkan acceleration"
+  else
+    BACKEND="torch"
+    vlog "$HOST_OS detected; using torch backend"
+  fi
 fi
 
 # Resolve GGUF model for vulkan backend
@@ -356,7 +409,7 @@ if [[ "$VERBOSE" == "1" ]]; then
   echo "========================================"
   echo "Krkn Retrieval-Only Pipeline"
   echo "========================================"
-  echo "Query: $QUERY"
+  echo "Query: ${QUERY:-<interactive>}"
   echo "Retrieve-K: $RETRIEVE_K  |  Rerank-K: $RERANK_K"
   echo "Engine: $ENGINE  |  Image: $IMAGE"
   echo "Host OS: $HOST_OS  |  Backend: $BACKEND"
@@ -442,7 +495,7 @@ QUERY_LOG="$(mktemp)"
 
 if [[ "$INTERACTIVE" == "1" ]]; then
   if [[ "$VERBOSE" == "1" ]]; then
-    run_retriever_python \
+    run_retriever_python_interactive \
       -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
       -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
       -e DOCS_DIR=/app/docs \
@@ -459,7 +512,7 @@ if [[ "$INTERACTIVE" == "1" ]]; then
         --rerank-k "$RERANK_K" \
         --interactive
   else
-    run_retriever_python \
+    run_retriever_python_interactive \
       -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
       -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
       -e DOCS_DIR=/app/docs \
@@ -628,7 +681,8 @@ if [[ "$VERBOSE" == "1" ]]; then
   echo "[2/3] Ensuring FAISS index exists          (${INDEX_MS}ms)"
   echo "[3/3] Running retrieval and reranking      (${QUERY_MS}ms)"
   echo "Total elapsed: ${TOTAL_MS}ms"
-  python3 - "$OUTPUT_PATH" <<'PY'
+  if [[ "$INTERACTIVE" == "0" ]]; then
+    python3 - "$OUTPUT_PATH" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -651,9 +705,10 @@ print("")
 print(f"  CE scores:  {fmt(ce_scores)}")
 print(f"  FAISS:      {fmt(faiss_scores)}")
 PY
-  echo ""
-  echo "[verbose] Retriever command output"
-  cat "$QUERY_LOG"
+    echo ""
+    echo "[verbose] Retriever command output"
+    cat "$QUERY_LOG"
+  fi
 fi
 
 
