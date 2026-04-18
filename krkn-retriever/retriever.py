@@ -579,6 +579,16 @@ def export_results(query, results, output_path, ranker, include_text=False):
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"Exported retrieval payload to: {out_path}")
 
+def run_single_query(ranker, query, retrieve_k, rerank_k, export_path=None, include_text=False, display=True):
+    if display:
+        print(f"\nSearching for: {query}")
+    res = ranker.find_match(query, retrieve_k, rerank_k)
+    if display:
+        display_results(res[:5])
+    if export_path:
+        export_results(query, res, export_path, ranker, include_text=include_text)
+    return res
+
 def main():
     parser = argparse.ArgumentParser(description="Two-stage retrieval (SentenceTransformers + Reranker)")
     parser.add_argument("--device", choices=["auto", "cuda", "mps", "cpu"], default=os.environ.get("RETRIEVER_DEVICE", "auto"), help="Device policy: acceleration-first by default (auto)")
@@ -597,6 +607,7 @@ def main():
     query_parser.add_argument("--rerank-k", type=int, default=5, help="Top results after Cross-Encoder reranking (default: 5)")
     query_parser.add_argument("--interactive", "-i", action="store_true", default=True)
     query_parser.add_argument("--non-interactive", action="store_false", dest="interactive")
+    query_parser.add_argument("--jsonl-stdin", action="store_true", help="Read JSON request lines from stdin and return JSON status lines on stdout")
     query_parser.add_argument("--export", default=None, help="Write query + top results to JSON (for inference handoff)")
     query_parser.add_argument("--include-text", action="store_true", help="Include full scenario text in exported JSON")
 
@@ -613,7 +624,34 @@ def main():
     if args.cmd == "index":
         ranker.build_index(args.docs)
     elif args.cmd == "query":
-        if args.interactive and not args.query:
+        if args.jsonl_stdin:
+            for raw in sys.stdin:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                req = json.loads(raw)
+                q = str(req.get("query", "")).strip()
+                if not q:
+                    print(json.dumps({"ok": False, "error": "empty_query"}), flush=True)
+                    continue
+                if q.lower() in ("exit", "quit"):
+                    print(json.dumps({"ok": True, "done": True}), flush=True)
+                    break
+                retrieve_k = int(req.get("retrieve_k", args.retrieve_k))
+                rerank_k = int(req.get("rerank_k", args.rerank_k))
+                export_path = req.get("export")
+                include_text = bool(req.get("include_text", args.include_text))
+                run_single_query(
+                    ranker,
+                    q,
+                    retrieve_k,
+                    rerank_k,
+                    export_path=export_path,
+                    include_text=include_text,
+                    display=False,
+                )
+                print(json.dumps({"ok": True, "done": False}), flush=True)
+        elif args.interactive and not args.query:
             print("\nInteractive Query Mode (type 'exit' or 'quit' to end)\n")
             while True:
                 q = input("Query: ").strip()
@@ -623,15 +661,16 @@ def main():
                 if q.lower() in ("exit", "quit"):
                     print("\nGoodbye!")
                     break
-                print(f"\nSearching for: {q}")
-                res = ranker.find_match(q, args.retrieve_k, args.rerank_k)
-                display_results(res[:5])
+                run_single_query(ranker, q, args.retrieve_k, args.rerank_k)
         elif args.query:
-            print(f"\nSearching for: {args.query}")
-            res = ranker.find_match(args.query, args.retrieve_k, args.rerank_k)
-            display_results(res[:5])
-            if args.export:
-                export_results(args.query, res, args.export, ranker, include_text=args.include_text)
+            run_single_query(
+                ranker,
+                args.query,
+                args.retrieve_k,
+                args.rerank_k,
+                export_path=args.export,
+                include_text=args.include_text,
+            )
         elif not args.query:
             print("\nNo query provided. Use --non-interactive or provide a query.")
             parser.print_help()

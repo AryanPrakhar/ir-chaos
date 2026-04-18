@@ -160,7 +160,19 @@ vlog() {
 
 PIPELINE_LOG="$(mktemp)"
 QUERY_LOG=""
+SESSION_REQ_FIFO=""
+SESSION_RESP_FIFO=""
+SESSION_PID=""
 cleanup_logs() {
+  if [[ -n "$SESSION_PID" ]]; then
+    kill "$SESSION_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$SESSION_REQ_FIFO" && -p "$SESSION_REQ_FIFO" ]]; then
+    rm -f "$SESSION_REQ_FIFO"
+  fi
+  if [[ -n "$SESSION_RESP_FIFO" && -p "$SESSION_RESP_FIFO" ]]; then
+    rm -f "$SESSION_RESP_FIFO"
+  fi
   rm -f "$PIPELINE_LOG"
   if [[ -n "$QUERY_LOG" ]]; then
     rm -f "$QUERY_LOG"
@@ -336,11 +348,11 @@ run_engine() {
   fi
 }
 
-run_engine_interactive() {
+run_engine_with_stdin() {
   if [[ -n "${GPU_FLAGS+x}" ]] && [[ ${#GPU_FLAGS[@]} -gt 0 ]]; then
-    "$ENGINE" run --rm -it "${GPU_FLAGS[@]}" "$@"
+    "$ENGINE" run --rm -i "${GPU_FLAGS[@]}" "$@"
   else
-    "$ENGINE" run --rm -it "$@"
+    "$ENGINE" run --rm -i "$@"
   fi
 }
 
@@ -352,12 +364,199 @@ run_retriever_python() {
   run_engine "${run_args[@]}" "$@"
 }
 
-run_retriever_python_interactive() {
+run_retriever_python_with_stdin() {
   local run_args=(--entrypoint python3)
   if [[ -n "${LLAMA_MOUNT_ARGS+x}" ]] && [[ ${#LLAMA_MOUNT_ARGS[@]} -gt 0 ]]; then
     run_args+=("${LLAMA_MOUNT_ARGS[@]}")
   fi
-  run_engine_interactive "${run_args[@]}" "$@"
+  run_engine_with_stdin "${run_args[@]}" "$@"
+}
+
+run_query_once() {
+  if [[ "$VERBOSE" == "1" ]]; then
+    if ! run_retriever_python \
+      -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
+      -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
+      -v "$SHARED_DIR:/io$MOUNT_LABEL_SUFFIX" \
+      -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
+      -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
+      -e DOCS_DIR=/app/docs \
+      -e RETRIEVER_BACKEND="$BACKEND" \
+      -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
+      -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
+      -e HF_HOME=/root/.cache/huggingface \
+      -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
+      -e TORCH_HOME=/root/.cache/torch \
+      -w /app \
+      "$IMAGE" \
+      retriever.py "${DEVICE_ARGS[@]}" query "$QUERY" \
+        --retrieve-k "$RETRIEVE_K" \
+        --rerank-k "$RERANK_K" \
+        --non-interactive \
+        --export /io/retrieval_output.json \
+        --include-text >"$QUERY_LOG" 2>&1; then
+      echo "Error: retrieval query failed."
+      cat "$QUERY_LOG"
+      exit 1
+    fi
+  else
+    if ! run_retriever_python \
+      -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
+      -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
+      -v "$SHARED_DIR:/io$MOUNT_LABEL_SUFFIX" \
+      -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
+      -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
+      -e DOCS_DIR=/app/docs \
+      -e RETRIEVER_BACKEND="$BACKEND" \
+      -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
+      -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
+      -e HF_HOME=/root/.cache/huggingface \
+      -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
+      -e TORCH_HOME=/root/.cache/torch \
+      -w /app \
+      "$IMAGE" \
+      retriever.py "${DEVICE_ARGS[@]}" query "$QUERY" \
+        --retrieve-k "$RETRIEVE_K" \
+        --rerank-k "$RERANK_K" \
+        --non-interactive \
+        --export /io/retrieval_output.json \
+        --include-text >"$QUERY_LOG" 2>&1; then
+      echo "Error: retrieval query failed."
+      tail -n 40 "$QUERY_LOG"
+      exit 1
+    fi
+  fi
+}
+
+start_query_session() {
+  SESSION_REQ_FIFO="$(mktemp -u)"
+  SESSION_RESP_FIFO="$(mktemp -u)"
+  mkfifo "$SESSION_REQ_FIFO" "$SESSION_RESP_FIFO"
+
+  run_retriever_python_with_stdin \
+    -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
+    -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
+    -v "$SHARED_DIR:/io$MOUNT_LABEL_SUFFIX" \
+    -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
+    -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
+    -e DOCS_DIR=/app/docs \
+    -e RETRIEVER_BACKEND="$BACKEND" \
+    -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
+    -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
+    -e HF_HOME=/root/.cache/huggingface \
+    -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
+    -e TORCH_HOME=/root/.cache/torch \
+    -e PYTHONUNBUFFERED=1 \
+    -w /app \
+    "$IMAGE" \
+    retriever.py "${DEVICE_ARGS[@]}" query \
+      --jsonl-stdin \
+      --non-interactive \
+      --retrieve-k "$RETRIEVE_K" \
+      --rerank-k "$RERANK_K" \
+      <"$SESSION_REQ_FIFO" >"$SESSION_RESP_FIFO" 2>"$QUERY_LOG.tmp" &
+  SESSION_PID="$!"
+
+  exec 3>"$SESSION_REQ_FIFO"
+  exec 4<"$SESSION_RESP_FIFO"
+}
+
+wait_for_query_status() {
+  local line
+  while IFS= read -r -t 120 line <&4; do
+    if [[ "$line" == \{\"ok\"* ]]; then
+      echo "$line"
+      return 0
+    fi
+  done
+  return 1
+}
+
+render_query_output() {
+  local query_ms="$1"
+  local doc_count output_path seconds_display
+  doc_count="$(index_doc_count)"
+  output_path="$SHARED_DIR/retrieval_output.json"
+  seconds_display="$(python3 - "$query_ms" <<'PY'
+import sys
+ms = int(sys.argv[1])
+print(f"{ms/1000.0:.1f}")
+PY
+)"
+
+  echo ""
+  echo "  Searching ${doc_count} scenarios...  done in ${seconds_display}s"
+  echo ""
+  python3 - "$output_path" <<'PY'
+import json
+import math
+import sys
+from pathlib import Path
+
+FAISS_GAP = 0.07
+CE_GAP = 1.0
+CONF_CE_WEIGHT = 0.8
+CONF_FAISS_WEIGHT = 0.2
+
+path = Path(sys.argv[1])
+if not path.exists():
+    print("  No retrieval output found.")
+    raise SystemExit(0)
+
+payload = json.loads(path.read_text(encoding="utf-8"))
+results = payload.get("results", [])
+
+if not results:
+    print("  No matching scenarios.")
+    raise SystemExit(0)
+
+def confidence_score(row):
+    """Return the raw blended score (0.0 - 1.0) without any UX transforms."""
+    ce = float(row.get("score", 0.0))
+    faiss = float(row.get("retrieval_score", 0.0))
+    ce_sigmoid = 1.0 / (1.0 + math.exp(-ce))
+    blended = (CONF_CE_WEIGHT * ce_sigmoid) + (CONF_FAISS_WEIGHT * max(0.0, min(1.0, faiss)))
+    return max(0.0, min(1.0, blended))
+
+clear_count = 1
+if len(results) >= 2:
+    faiss_gap = abs(float(results[0].get("retrieval_score", 0.0)) - float(results[1].get("retrieval_score", 0.0)))
+    ce_gap = abs(float(results[0].get("score", 0.0)) - float(results[1].get("score", 0.0)))
+    if faiss_gap < FAISS_GAP or ce_gap < CE_GAP:
+        clear_count = 2
+
+best = results[:clear_count]
+rest = results[clear_count:]
+all_scores = [confidence_score(r) for r in results]
+
+def render_bar(score, width=10):
+    filled = max(0, min(width, int(round(score * width))))
+    return ("█" * filled) + ("░" * (width - filled))
+
+name_w = 22
+bar_w = 10
+top_border = "  ┌─ Best matches ──────────────────────────────────────────────┐"
+bottom_border = "  └─────────────────────────────────────────────────────────────┘"
+print(top_border)
+for idx, row in enumerate(best, 1):
+    name = str(row.get("name", "Unknown"))[:name_w].ljust(name_w)
+    score = all_scores[idx - 1]
+    bar = render_bar(score, width=bar_w)
+    print(f"  │  {idx:<2} {name} {bar}   {score:0.3f}            │")
+print(bottom_border)
+
+if rest:
+    print("")
+    print("  Also retrieved (lower confidence)")
+    for offset, row in enumerate(rest, clear_count + 1):
+        name = str(row.get("name", "Unknown"))[:name_w].ljust(name_w)
+        score = all_scores[offset - 1]
+        bar = render_bar(score, width=bar_w)
+        print(f"     {offset:<2} {name} {bar}   {score:0.4f}")
+PY
+
+  echo ""
+  echo "  Results -> $output_path"
 }
 
 # ── Setup ──
@@ -494,185 +693,63 @@ STEP_START_MS="$(now_ms)"
 QUERY_LOG="$(mktemp)"
 
 if [[ "$INTERACTIVE" == "1" ]]; then
-  if [[ "$VERBOSE" == "1" ]]; then
-    run_retriever_python_interactive \
-      -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
-      -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
-      -e DOCS_DIR=/app/docs \
-      -e RETRIEVER_BACKEND="$BACKEND" \
-      -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
-      -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
-      -e HF_HOME=/root/.cache/huggingface \
-      -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
-      -e TORCH_HOME=/root/.cache/torch \
-      -w /app \
-      "$IMAGE" \
-      retriever.py "${DEVICE_ARGS[@]}" query \
-        --retrieve-k "$RETRIEVE_K" \
-        --rerank-k "$RERANK_K" \
-        --interactive
-  else
-    run_retriever_python_interactive \
-      -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
-      -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
-      -e DOCS_DIR=/app/docs \
-      -e RETRIEVER_BACKEND="$BACKEND" \
-      -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
-      -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
-      -e HF_HOME=/root/.cache/huggingface \
-      -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
-      -e TORCH_HOME=/root/.cache/torch \
-      -w /app \
-      "$IMAGE" \
-      retriever.py "${DEVICE_ARGS[@]}" query \
-        --retrieve-k "$RETRIEVE_K" \
-        --rerank-k "$RERANK_K" \
-        --interactive
+  start_query_session
+  echo ""
+  echo "Interactive Query Mode (type 'exit' or 'quit' to end)"
+  echo ""
+  while true; do
+    printf "Query: "
+    if ! IFS= read -r QUERY; then
+      echo ""
+      break
+    fi
+    if [[ "$QUERY" == "exit" || "$QUERY" == "quit" ]]; then
+      echo ""
+      break
+    fi
+    if [[ -z "${QUERY// }" ]]; then
+      echo "Empty query. Please try again."
+      continue
+    fi
+    STEP_START_MS="$(now_ms)"
+    printf '{"query": %s, "retrieve_k": %s, "rerank_k": %s, "export": "/io/retrieval_output.json", "include_text": true}\n' \
+      "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$QUERY")" \
+      "$RETRIEVE_K" \
+      "$RERANK_K" \
+      >&3
+    if ! status_json="$(wait_for_query_status)"; then
+      echo "Error: retrieval query failed."
+      tail -n 40 "$QUERY_LOG"
+      break
+    fi
+    if [[ "$status_json" == *'"ok": false'* ]]; then
+      echo "Error: retrieval query failed."
+      tail -n 40 "$QUERY_LOG"
+      continue
+    fi
+    STEP_END_MS="$(now_ms)"
+    QUERY_MS="$((STEP_END_MS - STEP_START_MS))"
+    vlog "      Step time: ${QUERY_MS}ms"
+    render_query_output "$QUERY_MS"
+  done
+  printf '{"query": "quit"}\n' >&3 || true
+  exec 3>&- || true
+  exec 4<&- || true
+  wait "$SESSION_PID" 2>/dev/null || true
+  if [[ -f "$QUERY_LOG.tmp" ]]; then
+    grep -v "write /dev/stdout: broken pipe" "$QUERY_LOG.tmp" >>"$QUERY_LOG" || true
+    rm -f "$QUERY_LOG.tmp"
   fi
-elif [[ "$VERBOSE" == "1" ]]; then
-  if ! run_retriever_python \
-   -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
-   -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
-   -v "$SHARED_DIR:/io$MOUNT_LABEL_SUFFIX" \
-   -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
-   -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
-   -e DOCS_DIR=/app/docs \
-   -e RETRIEVER_BACKEND="$BACKEND" \
-   -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
-   -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
-   -e HF_HOME=/root/.cache/huggingface \
-   -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
-   -e TORCH_HOME=/root/.cache/torch \
-   -w /app \
-   "$IMAGE" \
-   retriever.py "${DEVICE_ARGS[@]}" query "$QUERY" \
-     --retrieve-k "$RETRIEVE_K" \
-       --rerank-k "$RERANK_K" \
-       --non-interactive \
-       --export /io/retrieval_output.json \
-       --include-text >"$QUERY_LOG" 2>&1; then
-     echo "Error: retrieval query failed."
-     cat "$QUERY_LOG"
-     exit 1
-   fi
 else
-  if ! run_retriever_python \
-    -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
-    -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
-    -v "$SHARED_DIR:/io$MOUNT_LABEL_SUFFIX" \
-    -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
-    -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
-    -e DOCS_DIR=/app/docs \
-    -e RETRIEVER_BACKEND="$BACKEND" \
-    -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
-    -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
-    -e HF_HOME=/root/.cache/huggingface \
-    -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
-    -e TORCH_HOME=/root/.cache/torch \
-    -w /app \
-    "$IMAGE" \
-    retriever.py "${DEVICE_ARGS[@]}" query "$QUERY" \
-      --retrieve-k "$RETRIEVE_K" \
-      --rerank-k "$RERANK_K" \
-      --non-interactive \
-      --export /io/retrieval_output.json \
-      --include-text >"$QUERY_LOG" 2>&1; then
-    echo "Error: retrieval query failed."
-    tail -n 40 "$QUERY_LOG"
-    exit 1
-  fi
+  run_query_once
+  STEP_END_MS="$(now_ms)"
+  QUERY_MS="$((STEP_END_MS - STEP_START_MS))"
+  vlog "      Step time: ${QUERY_MS}ms"
+  render_query_output "$QUERY_MS"
 fi
-STEP_END_MS="$(now_ms)"
-QUERY_MS="$((STEP_END_MS - STEP_START_MS))"
-vlog "      Step time: ${QUERY_MS}ms"
 
 TOTAL_END_MS="$(now_ms)"
 TOTAL_MS="$((TOTAL_END_MS - TOTAL_START_MS))"
-
-if [[ "$INTERACTIVE" == "0" ]]; then
-  DOC_COUNT="$(index_doc_count)"
-  OUTPUT_PATH="$SHARED_DIR/retrieval_output.json"
-  SECONDS_DISPLAY="$(python3 - "$QUERY_MS" <<'PY'
-import sys
-ms = int(sys.argv[1])
-print(f"{ms/1000.0:.1f}")
-PY
-)"
-
-  echo ""
-  echo "  Searching ${DOC_COUNT} scenarios...  done in ${SECONDS_DISPLAY}s"
-  echo ""
-  python3 - "$OUTPUT_PATH" <<'PY'
-import json
-import math
-import sys
-from pathlib import Path
-
-FAISS_GAP = 0.07
-CE_GAP = 1.0
-CONF_CE_WEIGHT = 0.8
-CONF_FAISS_WEIGHT = 0.2
-
-path = Path(sys.argv[1])
-if not path.exists():
-    print("  No retrieval output found.")
-    raise SystemExit(0)
-
-payload = json.loads(path.read_text(encoding="utf-8"))
-results = payload.get("results", [])
-
-if not results:
-    print("  No matching scenarios.")
-    raise SystemExit(0)
-
-def confidence_score(row):
-    """Return the raw blended score (0.0 - 1.0) without any UX transforms."""
-    ce = float(row.get("score", 0.0))
-    faiss = float(row.get("retrieval_score", 0.0))
-    ce_sigmoid = 1.0 / (1.0 + math.exp(-ce))
-    blended = (CONF_CE_WEIGHT * ce_sigmoid) + (CONF_FAISS_WEIGHT * max(0.0, min(1.0, faiss)))
-    return max(0.0, min(1.0, blended))
-
-clear_count = 1
-if len(results) >= 2:
-    faiss_gap = abs(float(results[0].get("retrieval_score", 0.0)) - float(results[1].get("retrieval_score", 0.0)))
-    ce_gap = abs(float(results[0].get("score", 0.0)) - float(results[1].get("score", 0.0)))
-    if faiss_gap < FAISS_GAP or ce_gap < CE_GAP:
-        clear_count = 2
-
-best = results[:clear_count]
-rest = results[clear_count:]
-all_scores = [confidence_score(r) for r in results]
-
-def render_bar(score, width=10):
-    filled = max(0, min(width, int(round(score * width))))
-    return ("█" * filled) + ("░" * (width - filled))
-
-name_w = 22
-bar_w = 10
-top_border = "  ┌─ Best matches ──────────────────────────────────────────────┐"
-bottom_border = "  └─────────────────────────────────────────────────────────────┘"
-print(top_border)
-for idx, row in enumerate(best, 1):
-    name = str(row.get("name", "Unknown"))[:name_w].ljust(name_w)
-    score = all_scores[idx - 1]
-    bar = render_bar(score, width=bar_w)
-    print(f"  │  {idx:<2} {name} {bar}   {score:0.3f}            │")
-print(bottom_border)
-
-if rest:
-    print("")
-    print("  Also retrieved (lower confidence)")
-    for offset, row in enumerate(rest, clear_count + 1):
-        name = str(row.get("name", "Unknown"))[:name_w].ljust(name_w)
-        score = all_scores[offset - 1]
-        bar = render_bar(score, width=bar_w)
-        print(f"     {offset:<2} {name} {bar}   {score:0.4f}")
-PY
-
-  echo ""
-  echo "  Results -> $OUTPUT_PATH"
-fi
 
 if [[ "$VERBOSE" == "1" ]]; then
   echo ""
@@ -681,8 +758,8 @@ if [[ "$VERBOSE" == "1" ]]; then
   echo "[2/3] Ensuring FAISS index exists          (${INDEX_MS}ms)"
   echo "[3/3] Running retrieval and reranking      (${QUERY_MS}ms)"
   echo "Total elapsed: ${TOTAL_MS}ms"
-  if [[ "$INTERACTIVE" == "0" ]]; then
-    python3 - "$OUTPUT_PATH" <<'PY'
+  if [[ -f "$SHARED_DIR/retrieval_output.json" ]]; then
+    python3 - "$SHARED_DIR/retrieval_output.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -705,9 +782,13 @@ print("")
 print(f"  CE scores:  {fmt(ce_scores)}")
 print(f"  FAISS:      {fmt(faiss_scores)}")
 PY
+  fi
+  echo ""
+  echo "[verbose] Retriever command output"
+  cat "$QUERY_LOG"
+  if [[ "$INTERACTIVE" == "1" ]]; then
     echo ""
-    echo "[verbose] Retriever command output"
-    cat "$QUERY_LOG"
+    echo "[verbose] Interactive mode ran with pipeline scoring/UI per query."
   fi
 fi
 
