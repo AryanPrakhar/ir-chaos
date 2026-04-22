@@ -32,7 +32,8 @@ RUN pip install --upgrade pip setuptools wheel && \
       huggingface_hub[cli] \
       sentence-transformers \
       faiss-cpu \
-      FlagEmbedding==1.2.3
+      FlagEmbedding==1.2.3 \
+      requests
 
 COPY krkn-retriever/ /app/
 COPY docs/ /app/docs/

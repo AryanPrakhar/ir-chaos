@@ -15,9 +15,12 @@ set -euo pipefail
 #   RETRIEVER_BACKEND=auto|torch|vulkan
 #   RETRIEVER_ACCELERATION=auto|gpu|cpu
 #   LLAMA_EMBED_MODEL=/abs/path/to/model.gguf
+#   LLAMA_RERANKER_MODEL=/abs/path/to/reranker.gguf
 #   LLAMA_GPU_LAYERS=-1
 #   RETRIEVER_GGUF_REPO=Qwen/Qwen3-Embedding-0.6B-GGUF
 #   RETRIEVER_GGUF_FILE=Qwen3-Embedding-0.6B-f16.gguf
+#   RETRIEVER_RERANKER_GGUF_REPO=gpustack/bge-reranker-base-GGUF
+#   RETRIEVER_RERANKER_GGUF_FILE=bge-reranker-base-Q8_0.gguf
 #   RETRIEVER_AUTO_DOWNLOAD_MODEL=1
 #   RETRIEVER_FORCE_BUILD=1
 #   HF_CACHE_DIR, TORCH_CACHE_DIR
@@ -56,9 +59,12 @@ DOCKERFILE="${RETRIEVER_DOCKERFILE:-$ROOT_DIR/krkn-retriever/Dockerfile}"
 FORCE_BUILD="${RETRIEVER_FORCE_BUILD:-0}"
 BACKEND="${RETRIEVER_BACKEND:-auto}"
 LLAMA_EMBED_MODEL_PATH="${LLAMA_EMBED_MODEL:-}"
+LLAMA_RERANKER_MODEL_PATH="${LLAMA_RERANKER_MODEL:-}"
 LLAMA_GPU_LAYERS="${LLAMA_GPU_LAYERS:--1}"
 GGUF_REPO="${RETRIEVER_GGUF_REPO:-Qwen/Qwen3-Embedding-0.6B-GGUF}"
 GGUF_FILE="${RETRIEVER_GGUF_FILE:-Qwen3-Embedding-0.6B-f16.gguf}"
+RERANKER_GGUF_REPO="${RETRIEVER_RERANKER_GGUF_REPO:-gpustack/bge-reranker-base-GGUF}"
+RERANKER_GGUF_FILE="${RETRIEVER_RERANKER_GGUF_FILE:-bge-reranker-base-Q8_0.gguf}"
 AUTO_DOWNLOAD_MODEL="${RETRIEVER_AUTO_DOWNLOAD_MODEL:-1}"
 ACCELERATION_MODE="${RETRIEVER_ACCELERATION:-auto}"
 
@@ -266,6 +272,14 @@ download_gguf_model() {
   curl -L --fail --retry 3 --continue-at - -o "$out_path" "$url"
 }
 
+download_reranker_gguf_model() {
+  local out_path="$1"
+  local url="https://huggingface.co/${RERANKER_GGUF_REPO}/resolve/main/${RERANKER_GGUF_FILE}"
+  vlog "      Downloading GGUF reranker: ${RERANKER_GGUF_REPO}/${RERANKER_GGUF_FILE}"
+  mkdir -p "$(dirname "$out_path")"
+  curl -L --fail --retry 3 --continue-at - -o "$out_path" "$url"
+}
+
 configure_acceleration() {
   GPU_FLAGS=()
   DEVICE_ARGS=(--device cpu --cpu-only)
@@ -378,6 +392,7 @@ start_api_standby() {
         -e DOCS_DIR=/app/docs \
         -e RETRIEVER_BACKEND="$BACKEND" \
         -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
+        -e LLAMA_RERANKER_MODEL="$LLAMA_RERANKER_MODEL_PATH" \
         -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
         -e HF_HOME=/root/.cache/huggingface \
         -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
@@ -399,6 +414,7 @@ start_api_standby() {
         -e DOCS_DIR=/app/docs \
         -e RETRIEVER_BACKEND="$BACKEND" \
         -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
+        -e LLAMA_RERANKER_MODEL="$LLAMA_RERANKER_MODEL_PATH" \
         -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
         -e HF_HOME=/root/.cache/huggingface \
         -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \
@@ -589,17 +605,26 @@ if [[ "$BACKEND" == "auto" ]]; then
   fi
 fi
 
-# Resolve GGUF model for vulkan backend
+# Resolve GGUF models for vulkan backend
 if [[ "$BACKEND" == "vulkan" ]]; then
   if [[ -z "$LLAMA_EMBED_MODEL_PATH" ]]; then
     LLAMA_EMBED_MODEL_PATH="$ROOT_DIR/models/$GGUF_FILE"
   fi
+  if [[ -z "$LLAMA_RERANKER_MODEL_PATH" ]]; then
+    LLAMA_RERANKER_MODEL_PATH="$ROOT_DIR/models/$RERANKER_GGUF_FILE"
+  fi
 
-  if [[ ! -f "$LLAMA_EMBED_MODEL_PATH" && "$AUTO_DOWNLOAD_MODEL" == "1" ]]; then
+  if [[ (! -f "$LLAMA_EMBED_MODEL_PATH" || ! -f "$LLAMA_RERANKER_MODEL_PATH") && "$AUTO_DOWNLOAD_MODEL" == "1" ]]; then
     if ! command -v curl >/dev/null 2>&1; then
       echo "Error: curl is required to auto-download GGUF models"; exit 1
     fi
+  fi
+
+  if [[ ! -f "$LLAMA_EMBED_MODEL_PATH" && "$AUTO_DOWNLOAD_MODEL" == "1" ]]; then
     download_gguf_model "$LLAMA_EMBED_MODEL_PATH"
+  fi
+  if [[ ! -f "$LLAMA_RERANKER_MODEL_PATH" && "$AUTO_DOWNLOAD_MODEL" == "1" ]]; then
+    download_reranker_gguf_model "$LLAMA_RERANKER_MODEL_PATH"
   fi
 
   if [[ ! -f "$LLAMA_EMBED_MODEL_PATH" ]]; then
@@ -608,11 +633,29 @@ if [[ "$BACKEND" == "vulkan" ]]; then
     echo "       Set LLAMA_EMBED_MODEL or keep RETRIEVER_AUTO_DOWNLOAD_MODEL=1"
     exit 1
   fi
+  if [[ ! -f "$LLAMA_RERANKER_MODEL_PATH" ]]; then
+    echo "Error: Vulkan backend needs a GGUF reranker model file"
+    echo "       Expected: $LLAMA_RERANKER_MODEL_PATH"
+    echo "       Set LLAMA_RERANKER_MODEL or keep RETRIEVER_AUTO_DOWNLOAD_MODEL=1"
+    exit 1
+  fi
 
   LLAMA_MODEL_ABS="$(cd "$(dirname "$LLAMA_EMBED_MODEL_PATH")" && pwd)/$(basename "$LLAMA_EMBED_MODEL_PATH")"
+  RERANKER_MODEL_ABS="$(cd "$(dirname "$LLAMA_RERANKER_MODEL_PATH")" && pwd)/$(basename "$LLAMA_RERANKER_MODEL_PATH")"
   LLAMA_MODEL_BASENAME="$(basename "$LLAMA_MODEL_ABS")"
-  LLAMA_EMBED_MODEL_PATH="/models/$LLAMA_MODEL_BASENAME"
-  LLAMA_MOUNT_ARGS=(-v "$(dirname "$LLAMA_MODEL_ABS"):/models$MOUNT_LABEL_SUFFIX")
+  RERANKER_MODEL_BASENAME="$(basename "$RERANKER_MODEL_ABS")"
+  if [[ "$(dirname "$LLAMA_MODEL_ABS")" == "$(dirname "$RERANKER_MODEL_ABS")" ]]; then
+    LLAMA_EMBED_MODEL_PATH="/models/$LLAMA_MODEL_BASENAME"
+    LLAMA_RERANKER_MODEL_PATH="/models/$RERANKER_MODEL_BASENAME"
+    LLAMA_MOUNT_ARGS=(-v "$(dirname "$LLAMA_MODEL_ABS"):/models$MOUNT_LABEL_SUFFIX")
+  else
+    LLAMA_EMBED_MODEL_PATH="/models-embed/$LLAMA_MODEL_BASENAME"
+    LLAMA_RERANKER_MODEL_PATH="/models-reranker/$RERANKER_MODEL_BASENAME"
+    LLAMA_MOUNT_ARGS=(
+      -v "$(dirname "$LLAMA_MODEL_ABS"):/models-embed$MOUNT_LABEL_SUFFIX"
+      -v "$(dirname "$RERANKER_MODEL_ABS"):/models-reranker$MOUNT_LABEL_SUFFIX"
+    )
+  fi
 fi
 
 # ── Configure acceleration (sets BUILD_ARGS, GPU_FLAGS, DEVICE_ARGS) ──
@@ -629,6 +672,7 @@ if [[ "$VERBOSE" == "1" ]]; then
   echo "Host OS: $HOST_OS  |  Backend: $BACKEND"
   echo "Acceleration: $ACCELERATION_MODE  |  GPU runtime: $GPU_RUNTIME_KIND"
   echo "LLAMA_EMBED_MODEL: ${LLAMA_EMBED_MODEL_PATH:-<not-set>}"
+  echo "LLAMA_RERANKER_MODEL: ${LLAMA_RERANKER_MODEL_PATH:-<not-set>}"
   echo "Build args: ${BUILD_ARGS[*]:-<none>}"
   echo "Output: $SHARED_DIR/retrieval_output.json"
   echo "========================================"
@@ -688,6 +732,7 @@ else
     -e DOCS_DIR=/app/docs \
     -e RETRIEVER_BACKEND="$BACKEND" \
     -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
+    -e LLAMA_RERANKER_MODEL="$LLAMA_RERANKER_MODEL_PATH" \
     -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
     -e HF_HOME=/root/.cache/huggingface \
     -e SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface \

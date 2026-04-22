@@ -21,6 +21,7 @@ from retriever import (
     DEFAULT_BACKEND,
     DEFAULT_LLAMA_MODEL,
     DEFAULT_LLAMA_GPU_LAYERS,
+    DEFAULT_LLAMA_RERANKER_MODEL,
     FAISS_TOP2_GAP_THRESHOLD,
     CE_TOP2_GAP_THRESHOLD,
     FINAL_CE_WEIGHT,
@@ -37,6 +38,7 @@ CPU_ONLY = os.environ.get("RETRIEVER_CPU_ONLY", "0") == "1"
 BACKEND = os.environ.get("RETRIEVER_BACKEND", DEFAULT_BACKEND)
 LLAMA_MODEL = os.environ.get("LLAMA_EMBED_MODEL", DEFAULT_LLAMA_MODEL)
 LLAMA_GPU_LAYERS = int(os.environ.get("LLAMA_GPU_LAYERS", str(DEFAULT_LLAMA_GPU_LAYERS)))
+LLAMA_RERANKER_MODEL = os.environ.get("LLAMA_RERANKER_MODEL", DEFAULT_LLAMA_RERANKER_MODEL)
 RETRIEVE_K = int(os.environ.get("RETRIEVE_K", "10"))
 RERANK_K = int(os.environ.get("RERANK_K", "5"))
 FORCE_REINDEX = os.environ.get("FORCE_REINDEX", "false").lower() == "true"
@@ -237,6 +239,7 @@ async def lifespan(app: FastAPI):
         backend=BACKEND,
         llama_model_path=LLAMA_MODEL,
         llama_gpu_layers=LLAMA_GPU_LAYERS,
+        llama_reranker_model_path=LLAMA_RERANKER_MODEL,
     )
 
     if FORCE_REINDEX or not (os.path.exists(INDEX_PATH) and os.path.exists(META_PATH)):

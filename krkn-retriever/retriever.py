@@ -5,6 +5,7 @@ import argparse
 import sys
 import json
 import time
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 import numpy as np
@@ -29,6 +30,7 @@ RETRIEVER_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 DEFAULT_BACKEND = os.environ.get("RETRIEVER_BACKEND", "auto")
 DEFAULT_LLAMA_MODEL = os.environ.get("LLAMA_EMBED_MODEL", "")
 DEFAULT_LLAMA_GPU_LAYERS = int(os.environ.get("LLAMA_GPU_LAYERS", "-1"))
+DEFAULT_LLAMA_RERANKER_MODEL = os.environ.get("LLAMA_RERANKER_MODEL", "")
 
 
 def score_to_match(ce_score: float, faiss_score: float) -> float:
@@ -110,6 +112,40 @@ NON_SCENARIO_DOCS = {
     "error_cases.md", "cerberus.md", "chaos-recommender.md",
     "aggregated_docs.md",
 }
+
+
+class LlamaCppReranker:
+    """Reranker implementation that uses llama.cpp GGUF reranking on Vulkan."""
+
+    def __init__(self, model_path: str, n_gpu_layers: int = -1):
+        from llama_cpp import Llama
+
+        self.model_path = model_path
+        self._llm = Llama(
+            model_path=model_path,
+            embedding=False,
+            n_gpu_layers=n_gpu_layers,
+            verbose=False,
+            reranking=True,
+        )
+
+    @staticmethod
+    def _to_logit(relevance_score: float) -> float:
+        bounded = min(max(float(relevance_score), 1e-6), 1.0 - 1e-6)
+        return math.log(bounded / (1.0 - bounded))
+
+    def compute_score(self, pairs, batch_size=8):
+        del batch_size
+        scores = []
+        for query, doc in pairs:
+            result = self._llm.rerank(query=query, documents=[doc])
+            items = result.get("results", []) if isinstance(result, dict) else []
+            if not items:
+                scores.append(MIN_CE_SCORE)
+                continue
+            relevance = items[0].get("relevance_score", 0.0)
+            scores.append(float(self._to_logit(relevance)))
+        return scores
 
 class CrossEncoderRanker:
     def __init__(self, cross_encoder_model=CROSS_ENCODER_MODEL, retriever_model=RETRIEVER_MODEL, device_preference="auto", cpu_only=False):
@@ -311,7 +347,7 @@ class CrossEncoderRanker:
 
 
 class LlamaVulkanRanker:
-    def __init__(self, model_path, gpu_layers=-1, cross_encoder_model=CROSS_ENCODER_MODEL, device_preference="auto", cpu_only=False):
+    def __init__(self, model_path, gpu_layers=-1, cross_encoder_model=CROSS_ENCODER_MODEL, device_preference="auto", cpu_only=False, reranker_model_path=DEFAULT_LLAMA_RERANKER_MODEL):
         if not model_path:
             raise ValueError("Vulkan backend requires --llama-model or LLAMA_EMBED_MODEL")
 
@@ -325,6 +361,7 @@ class LlamaVulkanRanker:
         self.device_preference = device_preference
         self.cpu_only = cpu_only
         self.rerank_device = resolve_device(device_preference=device_preference, cpu_only=cpu_only)
+        self.reranker_model_path = reranker_model_path
 
         self.llm = Llama(
             model_path=self.model_path,
@@ -340,7 +377,8 @@ class LlamaVulkanRanker:
 
         print(
             f"Using backend: vulkan (model={self.model_path}, n_gpu_layers={self.gpu_layers}, "
-            f"reranker={self.cross_encoder_model_name}, rerank_device={self.rerank_device})"
+            f"reranker={self.cross_encoder_model_name}, rerank_device={self.rerank_device}, "
+            f"llama_reranker={self.reranker_model_path or 'disabled'})"
         )
         self._load_index()
         self._init_models()
@@ -348,15 +386,16 @@ class LlamaVulkanRanker:
     def _init_models(self):
         if self.cross_encoder is not None:
             return
-        use_fp16 = self.rerank_device == "cuda"
-        try:
-            self.cross_encoder = FlagReranker(
-                self.cross_encoder_model_name,
-                use_fp16=use_fp16,
-                devices=self.rerank_device,
+        if self.reranker_model_path and Path(self.reranker_model_path).exists():
+            print(f"Loading llama.cpp reranker model: {Path(self.reranker_model_path).name}")
+            self.cross_encoder = LlamaCppReranker(
+                model_path=self.reranker_model_path,
+                n_gpu_layers=self.gpu_layers,
             )
-        except TypeError:
-            self.cross_encoder = FlagReranker(self.cross_encoder_model_name, use_fp16=use_fp16)
+            return
+
+        print("llama.cpp reranker model missing; falling back to FlagReranker on CPU")
+        self.cross_encoder = FlagReranker(self.cross_encoder_model_name, use_fp16=False)
 
     @staticmethod
     def _extract_embedding(resp):
@@ -535,11 +574,18 @@ def resolve_backend(backend, llama_model_path):
     return "torch"
 
 
-def get_ranker(device_preference="auto", cpu_only=False, backend=DEFAULT_BACKEND, llama_model_path=DEFAULT_LLAMA_MODEL, llama_gpu_layers=DEFAULT_LLAMA_GPU_LAYERS):
+def get_ranker(device_preference="auto", cpu_only=False, backend=DEFAULT_BACKEND, llama_model_path=DEFAULT_LLAMA_MODEL, llama_gpu_layers=DEFAULT_LLAMA_GPU_LAYERS, llama_reranker_model_path=DEFAULT_LLAMA_RERANKER_MODEL):
     global _ranker_instance, _ranker_config
 
     resolved_backend = resolve_backend(backend, llama_model_path)
-    desired_config = (resolved_backend, device_preference, cpu_only, llama_model_path, int(llama_gpu_layers))
+    desired_config = (
+        resolved_backend,
+        device_preference,
+        cpu_only,
+        llama_model_path,
+        int(llama_gpu_layers),
+        llama_reranker_model_path,
+    )
 
     if _ranker_instance is None or _ranker_config != desired_config:
         if resolved_backend == "vulkan":
@@ -549,6 +595,7 @@ def get_ranker(device_preference="auto", cpu_only=False, backend=DEFAULT_BACKEND
                 cross_encoder_model=CROSS_ENCODER_MODEL,
                 device_preference=device_preference,
                 cpu_only=cpu_only,
+                reranker_model_path=llama_reranker_model_path,
             )
         else:
             _ranker_instance = CrossEncoderRanker(
@@ -627,6 +674,7 @@ def main():
     parser.add_argument("--backend", choices=["auto", "torch", "vulkan"], default=DEFAULT_BACKEND, help="Retrieval backend. auto picks vulkan when LLAMA_EMBED_MODEL is set, otherwise torch")
     parser.add_argument("--llama-model", default=DEFAULT_LLAMA_MODEL, help="Path to GGUF embedding model for vulkan backend")
     parser.add_argument("--llama-gpu-layers", type=int, default=DEFAULT_LLAMA_GPU_LAYERS, help="llama.cpp n_gpu_layers for vulkan backend")
+    parser.add_argument("--llama-reranker-model", default=DEFAULT_LLAMA_RERANKER_MODEL, help="Path to GGUF reranker model for vulkan backend")
     subparsers = parser.add_subparsers(dest="cmd")
 
     index_parser = subparsers.add_parser("index")
@@ -650,6 +698,7 @@ def main():
         backend=args.backend,
         llama_model_path=args.llama_model,
         llama_gpu_layers=args.llama_gpu_layers,
+        llama_reranker_model_path=args.llama_reranker_model,
     )
 
     if args.cmd == "index":
