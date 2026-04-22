@@ -19,10 +19,11 @@ set -euo pipefail
 #   LLAMA_GPU_LAYERS=-1
 #   RETRIEVER_GGUF_REPO=Qwen/Qwen3-Embedding-0.6B-GGUF
 #   RETRIEVER_GGUF_FILE=Qwen3-Embedding-0.6B-f16.gguf
-#   RETRIEVER_RERANKER_GGUF_REPO=gpustack/bge-reranker-base-GGUF
-#   RETRIEVER_RERANKER_GGUF_FILE=bge-reranker-base-Q8_0.gguf
+#   RETRIEVER_RERANKER_GGUF_REPO=gpustack/bge-reranker-v2-m3-GGUF
+#   RETRIEVER_RERANKER_GGUF_FILE=bge-reranker-v2-m3-Q2_K.gguf
 #   RETRIEVER_AUTO_DOWNLOAD_MODEL=1
 #   RETRIEVER_FORCE_BUILD=1
+#   HF_TOKEN / HUGGING_FACE_HUB_TOKEN (optional, for gated HF downloads)
 #   HF_CACHE_DIR, TORCH_CACHE_DIR
 #
 # Output:
@@ -63,10 +64,25 @@ LLAMA_RERANKER_MODEL_PATH="${LLAMA_RERANKER_MODEL:-}"
 LLAMA_GPU_LAYERS="${LLAMA_GPU_LAYERS:--1}"
 GGUF_REPO="${RETRIEVER_GGUF_REPO:-Qwen/Qwen3-Embedding-0.6B-GGUF}"
 GGUF_FILE="${RETRIEVER_GGUF_FILE:-Qwen3-Embedding-0.6B-f16.gguf}"
-RERANKER_GGUF_REPO="${RETRIEVER_RERANKER_GGUF_REPO:-gpustack/bge-reranker-base-GGUF}"
-RERANKER_GGUF_FILE="${RETRIEVER_RERANKER_GGUF_FILE:-bge-reranker-base-Q8_0.gguf}"
+RERANKER_GGUF_REPO="${RETRIEVER_RERANKER_GGUF_REPO:-gpustack/bge-reranker-v2-m3-GGUF}"
+RERANKER_GGUF_FILE="${RETRIEVER_RERANKER_GGUF_FILE:-bge-reranker-v2-m3-Q2_K.gguf}"
 AUTO_DOWNLOAD_MODEL="${RETRIEVER_AUTO_DOWNLOAD_MODEL:-1}"
 ACCELERATION_MODE="${RETRIEVER_ACCELERATION:-auto}"
+HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-${HUGGINGFACE_TOKEN:-}}}"
+
+# Support llama.cpp shorthand "repo:QUANT" (e.g. gpustack/bge-reranker-v2-m3-GGUF:Q2_K)
+if [[ "$RERANKER_GGUF_REPO" == *:* ]]; then
+  RERANKER_QUANT="${RERANKER_GGUF_REPO#*:}"
+  RERANKER_GGUF_REPO="${RERANKER_GGUF_REPO%%:*}"
+  if [[ -z "${RETRIEVER_RERANKER_GGUF_FILE:-}" ]]; then
+    RERANKER_GGUF_FILE="$RERANKER_QUANT"
+  fi
+fi
+
+# Allow passing just quant name for the gpustack v2-m3 repo.
+if [[ "$RERANKER_GGUF_REPO" == "gpustack/bge-reranker-v2-m3-GGUF" && "$RERANKER_GGUF_FILE" != *.gguf ]]; then
+  RERANKER_GGUF_FILE="bge-reranker-v2-m3-${RERANKER_GGUF_FILE}.gguf"
+fi
 
 # Auto-detect host OS
 HOST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -269,7 +285,11 @@ download_gguf_model() {
   local url="https://huggingface.co/${GGUF_REPO}/resolve/main/${GGUF_FILE}"
   vlog "      Downloading GGUF model: ${GGUF_REPO}/${GGUF_FILE}"
   mkdir -p "$(dirname "$out_path")"
-  curl -L --fail --retry 3 --continue-at - -o "$out_path" "$url"
+  local curl_args=(-L --fail --retry 3 --continue-at - -o "$out_path")
+  if [[ -n "$HF_TOKEN" ]]; then
+    curl_args+=(-H "Authorization: Bearer $HF_TOKEN")
+  fi
+  curl "${curl_args[@]}" "$url"
 }
 
 download_reranker_gguf_model() {
@@ -277,7 +297,11 @@ download_reranker_gguf_model() {
   local url="https://huggingface.co/${RERANKER_GGUF_REPO}/resolve/main/${RERANKER_GGUF_FILE}"
   vlog "      Downloading GGUF reranker: ${RERANKER_GGUF_REPO}/${RERANKER_GGUF_FILE}"
   mkdir -p "$(dirname "$out_path")"
-  curl -L --fail --retry 3 --continue-at - -o "$out_path" "$url"
+  local curl_args=(-L --fail --retry 3 --continue-at - -o "$out_path")
+  if [[ -n "$HF_TOKEN" ]]; then
+    curl_args+=(-H "Authorization: Bearer $HF_TOKEN")
+  fi
+  curl "${curl_args[@]}" "$url"
 }
 
 configure_acceleration() {
@@ -624,7 +648,10 @@ if [[ "$BACKEND" == "vulkan" ]]; then
     download_gguf_model "$LLAMA_EMBED_MODEL_PATH"
   fi
   if [[ ! -f "$LLAMA_RERANKER_MODEL_PATH" && "$AUTO_DOWNLOAD_MODEL" == "1" ]]; then
-    download_reranker_gguf_model "$LLAMA_RERANKER_MODEL_PATH"
+    if ! download_reranker_gguf_model "$LLAMA_RERANKER_MODEL_PATH"; then
+      echo "Warning: failed to download GGUF reranker (${RERANKER_GGUF_REPO}/${RERANKER_GGUF_FILE})."
+      echo "         Falling back to FlagReranker (CPU) unless LLAMA_RERANKER_MODEL is provided."
+    fi
   fi
 
   if [[ ! -f "$LLAMA_EMBED_MODEL_PATH" ]]; then
@@ -634,27 +661,29 @@ if [[ "$BACKEND" == "vulkan" ]]; then
     exit 1
   fi
   if [[ ! -f "$LLAMA_RERANKER_MODEL_PATH" ]]; then
-    echo "Error: Vulkan backend needs a GGUF reranker model file"
-    echo "       Expected: $LLAMA_RERANKER_MODEL_PATH"
-    echo "       Set LLAMA_RERANKER_MODEL or keep RETRIEVER_AUTO_DOWNLOAD_MODEL=1"
-    exit 1
+    LLAMA_RERANKER_MODEL_PATH=""
   fi
 
   LLAMA_MODEL_ABS="$(cd "$(dirname "$LLAMA_EMBED_MODEL_PATH")" && pwd)/$(basename "$LLAMA_EMBED_MODEL_PATH")"
-  RERANKER_MODEL_ABS="$(cd "$(dirname "$LLAMA_RERANKER_MODEL_PATH")" && pwd)/$(basename "$LLAMA_RERANKER_MODEL_PATH")"
   LLAMA_MODEL_BASENAME="$(basename "$LLAMA_MODEL_ABS")"
-  RERANKER_MODEL_BASENAME="$(basename "$RERANKER_MODEL_ABS")"
-  if [[ "$(dirname "$LLAMA_MODEL_ABS")" == "$(dirname "$RERANKER_MODEL_ABS")" ]]; then
-    LLAMA_EMBED_MODEL_PATH="/models/$LLAMA_MODEL_BASENAME"
-    LLAMA_RERANKER_MODEL_PATH="/models/$RERANKER_MODEL_BASENAME"
-    LLAMA_MOUNT_ARGS=(-v "$(dirname "$LLAMA_MODEL_ABS"):/models$MOUNT_LABEL_SUFFIX")
+  if [[ -n "$LLAMA_RERANKER_MODEL_PATH" ]]; then
+    RERANKER_MODEL_ABS="$(cd "$(dirname "$LLAMA_RERANKER_MODEL_PATH")" && pwd)/$(basename "$LLAMA_RERANKER_MODEL_PATH")"
+    RERANKER_MODEL_BASENAME="$(basename "$RERANKER_MODEL_ABS")"
+    if [[ "$(dirname "$LLAMA_MODEL_ABS")" == "$(dirname "$RERANKER_MODEL_ABS")" ]]; then
+      LLAMA_EMBED_MODEL_PATH="/models/$LLAMA_MODEL_BASENAME"
+      LLAMA_RERANKER_MODEL_PATH="/models/$RERANKER_MODEL_BASENAME"
+      LLAMA_MOUNT_ARGS=(-v "$(dirname "$LLAMA_MODEL_ABS"):/models$MOUNT_LABEL_SUFFIX")
+    else
+      LLAMA_EMBED_MODEL_PATH="/models-embed/$LLAMA_MODEL_BASENAME"
+      LLAMA_RERANKER_MODEL_PATH="/models-reranker/$RERANKER_MODEL_BASENAME"
+      LLAMA_MOUNT_ARGS=(
+        -v "$(dirname "$LLAMA_MODEL_ABS"):/models-embed$MOUNT_LABEL_SUFFIX"
+        -v "$(dirname "$RERANKER_MODEL_ABS"):/models-reranker$MOUNT_LABEL_SUFFIX"
+      )
+    fi
   else
-    LLAMA_EMBED_MODEL_PATH="/models-embed/$LLAMA_MODEL_BASENAME"
-    LLAMA_RERANKER_MODEL_PATH="/models-reranker/$RERANKER_MODEL_BASENAME"
-    LLAMA_MOUNT_ARGS=(
-      -v "$(dirname "$LLAMA_MODEL_ABS"):/models-embed$MOUNT_LABEL_SUFFIX"
-      -v "$(dirname "$RERANKER_MODEL_ABS"):/models-reranker$MOUNT_LABEL_SUFFIX"
-    )
+    LLAMA_EMBED_MODEL_PATH="/models/$LLAMA_MODEL_BASENAME"
+    LLAMA_MOUNT_ARGS=(-v "$(dirname "$LLAMA_MODEL_ABS"):/models$MOUNT_LABEL_SUFFIX")
   fi
 fi
 

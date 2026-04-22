@@ -90,3 +90,22 @@ Progress lines appear as:
 - Use same query string verbatim
 - Verify service health before benchmarking
 - Record mode (`local` or `api`) in reports/logs
+
+## 8) Reranker GGUF source protocol
+
+Default reranker preset is now public:
+
+- `RETRIEVER_RERANKER_GGUF_REPO=gpustack/bge-reranker-v2-m3-GGUF`
+- `RETRIEVER_RERANKER_GGUF_FILE=bge-reranker-v2-m3-Q2_K.gguf`
+
+Shorthand is supported:
+
+```bash
+RETRIEVER_RERANKER_GGUF_REPO='gpustack/bge-reranker-v2-m3-GGUF:Q2_K'
+```
+
+If your chosen HF artifact is gated/private, set token:
+
+```bash
+HF_TOKEN=hf_xxx ./scripts/pipeline_retrieve_only.sh "your query" 10 5
+```
