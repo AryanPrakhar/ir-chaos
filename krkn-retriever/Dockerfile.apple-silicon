@@ -1,51 +1,57 @@
-FROM --platform=linux/arm64 fedora:42
+FROM registry.fedoraproject.org/fedora:42
 
-USER 0
-
-# ── 1. Vulkan / Mesa-Venus stack ──────────────────────────────────────────────
-RUN dnf -y install dnf-plugins-core dnf-plugin-versionlock && \
-    dnf -y copr enable slp/mesa-libkrun-vulkan && \
-    dnf -y install \
-        mesa-vulkan-drivers.aarch64 \
-        vulkan-loader-devel.aarch64 \
-        vulkan-headers \
-        vulkan-tools.aarch64 \
-        vulkan-loader.aarch64 \
-        glslc && \
-    dnf versionlock add mesa-vulkan-drivers && \
-    dnf clean all
-
-# ── 2. Python + build deps ────────────────────────────────────────────────────
-RUN dnf -y install --setopt=install_weak_deps=False \
-        python3 python3-pip python3-devel \
-        gcc gcc-c++ cmake ninja-build make pkgconf-pkg-config && \
-    dnf clean all
-
-# ── 3. Python packages ────────────────────────────────────────────────────────
 ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    CMAKE_ARGS="-DGGML_VULKAN=on" \
-    FORCE_CMAKE=1
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-RUN pip install --upgrade pip setuptools wheel && \
-    pip install --no-binary=llama-cpp-python llama-cpp-python && \
-    pip install torch --index-url https://download.pytorch.org/whl/cpu && \
-    pip install \
-        fastapi \
-        uvicorn \
-        "transformers==4.52.4" \
-        "huggingface_hub[cli]" \
-        sentence-transformers \
-        faiss-cpu \
-        "FlagEmbedding==1.2.3" \
-        requests
+ARG GGML_BACKEND=vulkan
+ARG TORCH_BUILD=auto
+ARG TORCH_CUDA_INDEX_URL=https://download.pytorch.org/whl/cu126
 
-# ── 4. Tell the Vulkan loader to find the Venus ICD ──────────────────────────
-# The COPR build drops the ICD here; make it explicit so the loader never misses it
-ENV VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/virtio_venus_icd.aarch64.json
+RUN dnf -y install --setopt=install_weak_deps=False \
+      python3 python3-pip python3-devel \
+      gcc gcc-c++ cmake ninja-build make pkgconf-pkg-config \
+      vulkan-loader vulkan-loader-devel vulkan-headers \
+      glslc && \
+    dnf clean all
+
+# Install mesa separately with nvidia packages explicitly excluded.
+# mesa-vulkan-drivers weak-deps pull in nvidia vulkan drivers by default.
+RUN dnf -y install --setopt=install_weak_deps=False \
+      --exclude="mesa-vulkan-drivers-*nvidia*" \
+      --exclude="nvidia-*" \
+      --exclude="xorg-x11-drv-nvidia*" \
+      mesa-vulkan-drivers && \
+    dnf clean all
+
+RUN pip install --upgrade pip setuptools wheel && \
+    CMAKE_ARGS="-DGGML_VULKAN=on \
+                -DGGML_VULKAN_COOPMAT_SUPPORT=off \
+                -DGGML_VULKAN_COOPMAT2_SUPPORT=off" \
+    FORCE_CMAKE=1 \
+    CMAKE_BUILD_PARALLEL_LEVEL=2 \
+      pip install --no-binary=llama-cpp-python llama-cpp-python && \
+    if [ "$TORCH_BUILD" = "cuda" ]; then \
+      pip install --index-url "$TORCH_CUDA_INDEX_URL" torch; \
+    else \
+      pip install --index-url https://download.pytorch.org/whl/cpu torch; \
+    fi && \
+    pip install \
+      fastapi \
+      uvicorn \
+      transformers==4.52.4 \
+      "huggingface_hub[cli]" \
+      sentence-transformers \
+      faiss-cpu \
+      FlagEmbedding==1.2.3 \
+      requests
+
+COPY krkn-retriever/ /app/
+COPY docs/ /app/docs/
+
+ENV GGML_BACKEND_BUILT=vulkan \
+    VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/virtio_venus_icd.aarch64.json
 
 EXPOSE 8080
-
-CMD ["bash", "-c", "vulkaninfo --summary && exec bash"]
+CMD ["python3", "api_server.py"]
