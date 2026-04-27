@@ -17,21 +17,27 @@ RUN dnf -y install --setopt=install_weak_deps=False \
       spirv-headers-devel && \
     dnf clean all
 
-# Wrap glslc to disable coopmat/dot/bfloat16 capability probes.
-# Fedora 42's glslc is new enough to advertise these extensions but
-# the shader compilation then crashes. The wrapper intercepts cmake's
-# capability test invocations and returns failure so those paths are
-# never compiled.
+# Intercept glslc capability probes by checking shader file content.
+# cmake writes tiny test shaders to /tmp and compiles them to detect
+# driver features. We read those files and fail if they use extensions
+# that cause broken shader compilation on this platform.
 RUN mv /usr/bin/glslc /usr/bin/glslc.real && \
-    printf '#!/bin/bash\n\
-for arg in "$@"; do\n\
-  case "$arg" in\n\
-    *cooperative_matrix*|*CooperativeMatrix*|*NV_cooperative_matrix*|*integer_dot*|*bfloat16*)\n\
-      exit 1 ;;\n\
-  esac\n\
-done\n\
-exec /usr/bin/glslc.real "$@"\n' > /usr/bin/glslc && \
-    chmod +x /usr/bin/glslc
+    cat > /usr/bin/glslc << 'EOF'
+#!/bin/bash
+for arg in "$@"; do
+  case "$arg" in
+    /tmp/*)
+      if [ -f "$arg" ] && grep -qiE \
+        "cooperative_matrix|CooperativeMatrix|NV_cooperative|integer_dot_product|bfloat16|BFloat16" \
+        "$arg" 2>/dev/null; then
+        exit 1
+      fi
+      ;;
+  esac
+done
+exec /usr/bin/glslc.real "$@"
+EOF
+chmod +x /usr/bin/glslc
 
 RUN pip install --upgrade pip setuptools wheel && \
     CMAKE_ARGS="-DGGML_VULKAN=on" FORCE_CMAKE=1 \
@@ -51,7 +57,6 @@ RUN pip install --upgrade pip setuptools wheel && \
       FlagEmbedding==1.2.3 \
       requests
 
-# Restore real glslc after build — runtime doesn't need it
 RUN mv /usr/bin/glslc.real /usr/bin/glslc
 
 COPY krkn-retriever/ /app/
