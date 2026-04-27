@@ -13,11 +13,11 @@ RUN dnf -y install --setopt=install_weak_deps=False \
       python3 python3-pip python3-devel \
       gcc gcc-c++ cmake ninja-build make pkgconf-pkg-config \
       vulkan-loader vulkan-loader-devel vulkan-headers \
-      glslc && \
+      glslc \
+      spirv-headers \
+      spirv-tools && \
     dnf clean all
 
-# Install mesa separately with nvidia packages explicitly excluded.
-# mesa-vulkan-drivers weak-deps pull in nvidia vulkan drivers by default.
 RUN dnf -y install --setopt=install_weak_deps=False \
       --exclude="mesa-vulkan-drivers-*nvidia*" \
       --exclude="nvidia-*" \
@@ -26,9 +26,7 @@ RUN dnf -y install --setopt=install_weak_deps=False \
     dnf clean all
 
 RUN pip install --upgrade pip setuptools wheel && \
-    CMAKE_ARGS="-DGGML_VULKAN=on \
-                -DGGML_VULKAN_COOPMAT_SUPPORT=off \
-                -DGGML_VULKAN_COOPMAT2_SUPPORT=off" \
+    CMAKE_ARGS="-DGGML_VULKAN=on" \
     FORCE_CMAKE=1 \
     CMAKE_BUILD_PARALLEL_LEVEL=2 \
       pip install --no-binary=llama-cpp-python llama-cpp-python && \
