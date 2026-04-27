@@ -1,35 +1,51 @@
-FROM registry.fedoraproject.org/fedora:42
+FROM --platform=linux/arm64 fedora:42
 
+USER 0
+
+# ── 1. Vulkan / Mesa-Venus stack ──────────────────────────────────────────────
+RUN dnf -y install dnf-plugins-core dnf-plugin-versionlock && \
+    dnf -y copr enable slp/mesa-libkrun-vulkan && \
+    dnf -y install \
+        mesa-vulkan-drivers.aarch64 \
+        vulkan-loader-devel.aarch64 \
+        vulkan-headers \
+        vulkan-tools.aarch64 \
+        vulkan-loader.aarch64 \
+        glslc && \
+    dnf versionlock add mesa-vulkan-drivers && \
+    dnf clean all
+
+# ── 2. Python + build deps ────────────────────────────────────────────────────
+RUN dnf -y install --setopt=install_weak_deps=False \
+        python3 python3-pip python3-devel \
+        gcc gcc-c++ cmake ninja-build make pkgconf-pkg-config && \
+    dnf clean all
+
+# ── 3. Python packages ────────────────────────────────────────────────────────
 ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    CMAKE_ARGS="-DGGML_VULKAN=on" \
+    FORCE_CMAKE=1
 
 WORKDIR /app
 
-RUN dnf -y install --setopt=install_weak_deps=False \
-      python3 python3-pip python3-devel \
-      gcc gcc-c++ cmake ninja-build make pkgconf-pkg-config \
-      vulkan-loader vulkan-loader-devel vulkan-headers \
-      mesa-vulkan-drivers glslc && \
-    dnf clean all
-
 RUN pip install --upgrade pip setuptools wheel && \
-    CMAKE_ARGS="-DGGML_VULKAN=on" FORCE_CMAKE=1 \
-      pip install --no-binary=llama-cpp-python llama-cpp-python && \
-    pip install --index-url https://download.pytorch.org/whl/cpu torch && \
+    pip install --no-binary=llama-cpp-python llama-cpp-python && \
+    pip install torch --index-url https://download.pytorch.org/whl/cpu && \
     pip install \
-      fastapi \
-      uvicorn \
-      transformers==4.52.4 \
-      huggingface_hub[cli] \
-      sentence-transformers \
-      faiss-cpu \
-      FlagEmbedding==1.2.3 \
-      requests
+        fastapi \
+        uvicorn \
+        "transformers==4.52.4" \
+        "huggingface_hub[cli]" \
+        sentence-transformers \
+        faiss-cpu \
+        "FlagEmbedding==1.2.3" \
+        requests
 
-COPY krkn-retriever/ /app/
-COPY docs/ /app/docs/
-
-ENV GGML_BACKEND_BUILT=vulkan
+# ── 4. Tell the Vulkan loader to find the Venus ICD ──────────────────────────
+# The COPR build drops the ICD here; make it explicit so the loader never misses it
+ENV VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/virtio_venus_icd.aarch64.json
 
 EXPOSE 8080
-CMD ["python3", "api_server.py"]
+
+CMD ["bash", "-c", "vulkaninfo --summary && exec bash"]
