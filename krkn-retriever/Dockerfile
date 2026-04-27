@@ -19,7 +19,7 @@ RUN dnf -y install --setopt=install_weak_deps=False \
 
 RUN pip install --upgrade pip setuptools wheel && \
     CMAKE_ARGS="-DGGML_VULKAN=on" FORCE_CMAKE=1 \
-      pip install --no-binary=llama-cpp-python llama-cpp-python && \
+      pip install --no-binary=llama-cpp-python "llama-cpp-python==0.3.19" && \
     if [ "$TORCH_BUILD" = "cuda" ]; then \
       pip install --index-url "$TORCH_CUDA_INDEX_URL" torch; \
     else \
