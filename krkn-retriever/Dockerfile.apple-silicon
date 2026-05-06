@@ -1,11 +1,7 @@
 FROM registry.fedoraproject.org/fedora:42
-
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
-
 WORKDIR /app
-
-ARG GGML_BACKEND=vulkan
 ARG TORCH_BUILD=auto
 ARG TORCH_CUDA_INDEX_URL=https://download.pytorch.org/whl/cu126
 
@@ -14,15 +10,16 @@ RUN dnf -y install --setopt=install_weak_deps=False \
       gcc gcc-c++ cmake ninja-build make pkgconf-pkg-config \
       vulkan-loader vulkan-loader-devel vulkan-headers \
       mesa-vulkan-drivers glslc \
-  vulkan-tools \
-      spirv-headers-devel \
-
-
-    && dnf clean all
+      vulkan-tools \
+      spirv-headers-devel && \
+    dnf clean all
 
 RUN pip install --upgrade pip setuptools wheel && \
-    CMAKE_ARGS="-DGGML_VULKAN=on -DGGML_VULKAN_COOPMAT=OFF -DGGML_VULKAN_COOPMAT2=OFF" \
-    FORCE_CMAKE=1 \
+    CMAKE_ARGS="\
+      -DGGML_VULKAN=on \
+      -DGGML_VULKAN_COOPMAT=OFF \
+      -DGGML_VULKAN_COOPMAT2=OFF \
+    " FORCE_CMAKE=1 \
       pip install --no-binary=llama-cpp-python "llama-cpp-python==0.3.19" && \
     if [ "$TORCH_BUILD" = "cuda" ]; then \
       pip install --index-url "$TORCH_CUDA_INDEX_URL" torch; \
@@ -39,18 +36,8 @@ RUN pip install --upgrade pip setuptools wheel && \
       FlagEmbedding==1.2.3 \
       requests
 
-    RUN python3 - <<'EOF'
-    from llama_cpp import llama_backend_init, llama_backend_free
-    import llama_cpp
-    llama_backend_init()
-    import ctypes
-    lib_path = llama_cpp.__file__.replace('__init__.py', '').rstrip('/') + '/../llama_cpp/lib/libllama.so'
-    ctypes.CDLL(lib_path, mode=ctypes.RTLD_NOLOAD)
-    print("llama_cpp Vulkan library loaded OK")
-    llama_backend_free()
-    EOF
-
-ENV GGML_BACKEND_BUILT=vulkan
+COPY krkn-retriever/ /app/
+COPY docs/ /app/docs/
 
 EXPOSE 8080
-CMD ["bash"]
+CMD ["python3", "api_server.py"]
