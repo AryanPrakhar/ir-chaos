@@ -35,7 +35,7 @@ DEFAULT_LLAMA_RERANKER_MODEL = os.environ.get("LLAMA_RERANKER_MODEL", "")
 
 def probe_vulkan_devices():
     """
-    Return a list of dicts [{name, software}] describing available Vulkan devices.
+    Return a list of dicts [{index, name, software}] describing available Vulkan devices.
     Requires vulkaninfo (vulkan-tools package). Returns [] if not available.
     """
     devices = []
@@ -464,6 +464,20 @@ class LlamaVulkanRanker:
         except TypeError:
             # Some builds of llama-cpp-python may not accept `main_gpu`.
             if "main_gpu" in llama_kwargs:
+                if (
+                    self._has_hw_gpu
+                    and self._vulkan_devices
+                    and self._vulkan_devices[0].get("software")
+                ):
+                    print(
+                        "Warning: llama-cpp-python does not support selecting a Vulkan device; "
+                        "refusing software Vulkan and falling back to CPU (gpu_layers=0)."
+                    )
+                    self.embedding_gpu_layers = 0
+                    self.reranker_gpu_layers = 0
+                    self.gpu_layers = 0
+                    llama_kwargs["n_gpu_layers"] = 0
+                    llama_kwargs["verbose"] = False
                 llama_kwargs.pop("main_gpu", None)
                 self.llm = Llama(**llama_kwargs)
             else:

@@ -2,6 +2,8 @@ FROM registry.fedoraproject.org/fedora:42
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 WORKDIR /app
+ARG GGML_BACKEND=vulkan
+ENV GGML_BACKEND_BUILT=vulkan
 ARG TORCH_BUILD=auto
 ARG TORCH_CUDA_INDEX_URL=https://download.pytorch.org/whl/cu126
 

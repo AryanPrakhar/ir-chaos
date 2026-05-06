@@ -273,6 +273,11 @@ image_is_compatible() {
   if [[ -n "$GGML_BACKEND_DESIRED" ]]; then
     local image_backend
     image_backend=$("$ENGINE" run --rm --entrypoint sh "$IMAGE" -c 'echo $GGML_BACKEND_BUILT' 2>/dev/null)
+    # A Vulkan-built image can still run in CPU-only mode.
+    if [[ "$GGML_BACKEND_DESIRED" == "cpu" && "$image_backend" == "vulkan" ]]; then
+      return 0
+    fi
+
     if [[ "$image_backend" != "$GGML_BACKEND_DESIRED" ]]; then
       vlog "      Image backend mismatch: built=$image_backend want=$GGML_BACKEND_DESIRED"
       return 1
@@ -796,18 +801,31 @@ fi
 
 if [[ "$BACKEND" == "vulkan" && "$ACCELERATION_MODE" != "cpu" ]]; then
   accel_check=""
-  accel_resp="$(curl -sS -w "\n%{http_code}" "$API_BASE_URL/health/acceleration" 2>/dev/null || true)"
+  accel_resp="$(curl -sS -H "Accept: application/json" --max-time 3 -w "\n%{http_code}" "$API_BASE_URL/health/acceleration" 2>/dev/null || true)"
   accel_http="$(printf "%s" "$accel_resp" | tail -n 1)"
   accel_json="$(printf "%s" "$accel_resp" | sed '$d')"
-  if [[ -z "${accel_json//[[:space:]]/}" || "$accel_http" != "200" ]]; then
+
+  accel_trimmed="$(printf "%s" "$accel_json" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  if [[ -z "$accel_trimmed" || "$accel_http" != "200" ]]; then
     echo "Warning: acceleration health check failed (status=${accel_http:-none})."
-    if [[ -n "$accel_json" ]]; then
-      echo "Response: $accel_json"
+    if [[ -n "$accel_trimmed" ]]; then
+      echo "Response: $accel_trimmed"
     fi
     if [[ -n "$API_CONTAINER_ID" ]]; then
       "$ENGINE" logs "$API_CONTAINER_ID" | tail -n 80 || true
     fi
     accel_check="SKIP"
+  fi
+
+  if [[ "$accel_check" != "SKIP" ]]; then
+    if [[ "$accel_trimmed" != "{"* && "$accel_trimmed" != "["* ]]; then
+      echo "Warning: acceleration health check returned non-JSON (status=${accel_http:-none})."
+      echo "Response (first 200 chars): ${accel_trimmed:0:200}"
+      if [[ -n "$API_CONTAINER_ID" ]]; then
+        "$ENGINE" logs "$API_CONTAINER_ID" | tail -n 80 || true
+      fi
+      accel_check="SKIP"
+    fi
   fi
 
   if [[ "$accel_check" != "SKIP" ]]; then
@@ -838,7 +856,7 @@ if errors:
 
 print("OK")
 PY
-<<<"$accel_json" || true)"
+<<<"$accel_trimmed" || true)"
   fi
 
   if [[ "$accel_check" != "OK" && "$accel_check" != "SKIP" ]]; then
