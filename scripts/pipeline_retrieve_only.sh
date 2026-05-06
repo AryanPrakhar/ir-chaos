@@ -794,6 +794,53 @@ if ! wait_for_api_ready; then
   exit 1
 fi
 
+if [[ "$BACKEND" == "vulkan" && "$ACCELERATION_MODE" != "cpu" ]]; then
+  accel_resp="$(curl -sS -w "\n%{http_code}" "$API_BASE_URL/health/acceleration" 2>/dev/null || true)"
+  accel_http="$(printf "%s" "$accel_resp" | tail -n 1)"
+  accel_json="$(printf "%s" "$accel_resp" | sed '$d')"
+  if [[ -z "$accel_json" || "$accel_http" != "200" ]]; then
+    echo "Error: acceleration health check failed (status=${accel_http:-none})."
+    if [[ -n "$accel_json" ]]; then
+      echo "Response: $accel_json"
+    fi
+    if [[ -n "$API_CONTAINER_ID" ]]; then
+      "$ENGINE" logs "$API_CONTAINER_ID" | tail -n 80 || true
+    fi
+    exit 1
+  fi
+
+  accel_check="$(python3 - <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.stdin.read())
+errors = []
+if payload.get("backend") != "vulkan":
+    errors.append(f"backend={payload.get('backend')}")
+if not payload.get("embedding_gpu"):
+    errors.append("embedding_gpu=false")
+if payload.get("reranker_type") != "llama_cpp":
+    errors.append(f"reranker_type={payload.get('reranker_type')}")
+if not payload.get("reranker_gpu"):
+    errors.append("reranker_gpu=false")
+
+if errors:
+    print("ERROR: " + "; ".join(errors))
+    raise SystemExit(1)
+
+print("OK")
+PY
+<<<"$accel_json" || true)"
+
+  if [[ "$accel_check" != "OK" ]]; then
+    echo "Error: Vulkan acceleration not active." 
+    echo "Detail: ${accel_check}"
+    exit 1
+  fi
+
+  vlog "      Vulkan acceleration confirmed (embedding_gpu=true, reranker_type=llama_cpp, reranker_gpu=true)"
+fi
+
 if [[ "$INTERACTIVE" == "1" ]]; then
   echo ""
   printf '\033[36m[KRKN-AI]\033[0m Ready to profile your cluster. What should we test?\n'

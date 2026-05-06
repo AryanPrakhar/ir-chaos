@@ -121,11 +121,12 @@ class LlamaCppReranker:
         from llama_cpp import Llama
 
         self.model_path = model_path
+        n_gpu_layers = -1
         self._llm = Llama(
             model_path=model_path,
             embedding=False,
             n_gpu_layers=n_gpu_layers,
-            verbose=False,
+            verbose=True,
             reranking=True,
         )
 
@@ -356,7 +357,7 @@ class LlamaVulkanRanker:
         self.cross_encoder_model_name = cross_encoder_model
         self.retriever_model_name = f"llama.cpp embedding ({Path(model_path).name})"
         self.model_path = model_path
-        self.gpu_layers = gpu_layers
+        self.gpu_layers = -1
         self.device = "vulkan"
         self.device_preference = device_preference
         self.cpu_only = cpu_only
@@ -367,7 +368,7 @@ class LlamaVulkanRanker:
             model_path=self.model_path,
             embedding=True,
             n_gpu_layers=self.gpu_layers,
-            verbose=False,
+            verbose=True,
         )
 
         self.faiss_index = None

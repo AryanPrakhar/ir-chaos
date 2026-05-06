@@ -278,6 +278,7 @@ async def root():
         "rerank_k": RERANK_K,
         "endpoints": {
             "health": "/health",
+            "acceleration": "/health/acceleration",
             "retrieve": "/retrieve",
             "chat_completions_legacy": "/v1/chat/completions",
             "legacy_query": "/query",
@@ -295,6 +296,76 @@ async def health_check():
         "index_loaded": ranker.faiss_index is not None,
         "documents_indexed": len(ranker.doc_ids),
     }
+
+
+@app.get("/health/acceleration")
+def acceleration_status():
+    """
+    Report acceleration status of the currently-active ranker.
+    For Vulkan: check if embedding and reranker models are loaded on GPU.
+    For torch: check if CUDA/MPS is available and active.
+    """
+    if ranker is None:
+        raise HTTPException(status_code=503, detail="Ranker not initialized")
+
+    backend_status = {
+        "backend": BACKEND,
+        "device": DEVICE,
+        "cpu_only": CPU_ONLY,
+        "llama_model": LLAMA_MODEL or None,
+        "llama_reranker_model": LLAMA_RERANKER_MODEL or None,
+    }
+
+    if BACKEND == "vulkan":
+        if not LLAMA_MODEL:
+            raise HTTPException(
+                status_code=500,
+                detail="Vulkan backend requires LLAMA_EMBED_MODEL",
+            )
+        try:
+            if hasattr(ranker, "llm"):
+                _ = ranker.llm
+                backend_status["embedding_gpu"] = True
+                backend_status["embedding_model_loaded"] = True
+                backend_status["embedding_backend"] = "vulkan"
+
+                if hasattr(ranker, "cross_encoder"):
+                    if hasattr(ranker.cross_encoder, "_llm"):
+                        backend_status["reranker_gpu"] = True
+                        backend_status["reranker_type"] = "llama_cpp"
+                        backend_status["reranker_backend"] = "vulkan"
+                    else:
+                        backend_status["reranker_gpu"] = False
+                        backend_status["reranker_type"] = "flag_reranker"
+                        backend_status["reranker_backend"] = "cpu"
+                else:
+                    backend_status["reranker_gpu"] = False
+                    backend_status["reranker_type"] = "not_loaded"
+                    backend_status["reranker_backend"] = "cpu"
+            else:
+                backend_status["embedding_gpu"] = False
+                backend_status["embedding_backend"] = "cpu"
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to check Vulkan GPU status: {str(exc)}",
+            )
+    elif BACKEND == "torch":
+        try:
+            import torch
+
+            backend_status["cuda_available"] = torch.cuda.is_available()
+            backend_status["cuda_enabled"] = not CPU_ONLY and torch.cuda.is_available()
+            backend_status["mps_available"] = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+            backend_status["mps_enabled"] = not CPU_ONLY and hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+            backend_status["device_active"] = DEVICE if not CPU_ONLY else "cpu"
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to check torch backend status: {str(exc)}",
+            )
+
+    return backend_status
 
 
 @app.post("/v1/chat/completions", response_model=QueryResponse)
