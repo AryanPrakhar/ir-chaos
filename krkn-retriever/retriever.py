@@ -654,31 +654,25 @@ class LlamaVulkanRanker:
         pairs = [[query, self.prepare_for_reranking(c["text"])] for c in candidates]
         batch_size = 16 if self.rerank_device == "cuda" else 8
 
-        try:
-            ce_scores = self.cross_encoder.compute_score(pairs, batch_size=batch_size)
-            top_ce_score = max((float(s) for s in ce_scores), default=float("-inf"))
-            if top_ce_score < MIN_CE_SCORE:
-                print(f"No matching scenarios (top Cross-Encoder score {top_ce_score:.4f} < {MIN_CE_SCORE:.1f}).")
-                rerank_ms = (time.perf_counter() - rerank_start) * 1000
-                total_ms = (time.perf_counter() - search_start) * 1000
-                print(f"Timing: retrieval={retrieval_ms:.1f}ms | rerank={rerank_ms:.1f}ms | total={total_ms:.1f}ms")
-                return []
-            results = []
-            for i, ce_score in enumerate(ce_scores):
-                results.append({
-                    "id": candidates[i]["id"],
-                    "name": candidates[i]["name"],
-                    "score": float(ce_score),
-                    "retrieval_score": candidates[i]["retrieval_score"],
-                })
-            for row in results:
-                row["final_score"] = score_to_match(row["score"], row["retrieval_score"])
-            results = sorted(results, key=lambda x: x["final_score"], reverse=True)
-        except Exception as exc:
-            print(f"Reranker failed on backend={self.rerank_device}, falling back to cosine scores: {exc}")
-            results = sorted(candidates, key=lambda x: x["retrieval_score"], reverse=True)
-            for row in results:
-                row["final_score"] = row["retrieval_score"]
+        ce_scores = self.cross_encoder.compute_score(pairs, batch_size=batch_size)
+        top_ce_score = max((float(s) for s in ce_scores), default=float("-inf"))
+        if top_ce_score < MIN_CE_SCORE:
+            print(f"No matching scenarios (top Cross-Encoder score {top_ce_score:.4f} < {MIN_CE_SCORE:.1f}).")
+            rerank_ms = (time.perf_counter() - rerank_start) * 1000
+            total_ms = (time.perf_counter() - search_start) * 1000
+            print(f"Timing: retrieval={retrieval_ms:.1f}ms | rerank={rerank_ms:.1f}ms | total={total_ms:.1f}ms")
+            return []
+        results = []
+        for i, ce_score in enumerate(ce_scores):
+            results.append({
+                "id": candidates[i]["id"],
+                "name": candidates[i]["name"],
+                "score": float(ce_score),
+                "retrieval_score": candidates[i]["retrieval_score"],
+            })
+        for row in results:
+            row["final_score"] = score_to_match(row["score"], row["retrieval_score"])
+        results = sorted(results, key=lambda x: x["final_score"], reverse=True)
 
         if results:
             top_match = score_to_match(
