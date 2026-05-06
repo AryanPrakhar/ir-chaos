@@ -795,6 +795,7 @@ if ! wait_for_api_ready; then
 fi
 
 if [[ "$BACKEND" == "vulkan" && "$ACCELERATION_MODE" != "cpu" ]]; then
+  accel_check=""
   accel_resp="$(curl -sS -w "\n%{http_code}" "$API_BASE_URL/health/acceleration" 2>/dev/null || true)"
   accel_http="$(printf "%s" "$accel_resp" | tail -n 1)"
   accel_json="$(printf "%s" "$accel_resp" | sed '$d')"
@@ -809,11 +810,18 @@ if [[ "$BACKEND" == "vulkan" && "$ACCELERATION_MODE" != "cpu" ]]; then
     accel_check="SKIP"
   fi
 
-  accel_check="$(python3 - <<'PY'
+  if [[ "$accel_check" != "SKIP" ]]; then
+    accel_check="$(python3 - <<'PY'
 import json
 import sys
 
-payload = json.loads(sys.stdin.read())
+raw = sys.stdin.read()
+try:
+    payload = json.loads(raw)
+except Exception as exc:
+    print(f"ERROR: invalid_json: {exc}")
+    raise SystemExit(1)
+
 errors = []
 if payload.get("backend") != "vulkan":
     errors.append(f"backend={payload.get('backend')}")
@@ -831,6 +839,7 @@ if errors:
 print("OK")
 PY
 <<<"$accel_json" || true)"
+  fi
 
   if [[ "$accel_check" != "OK" && "$accel_check" != "SKIP" ]]; then
     echo "Warning: Vulkan acceleration not active." 
