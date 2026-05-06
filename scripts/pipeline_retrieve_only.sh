@@ -5,7 +5,7 @@ set -euo pipefail
 # CROSS-PLATFORM: Linux (native podman) + macOS (podman machine + libkrun)
 #
 # Usage:
-#   ./scripts/pipeline_retrieve_only.sh [query] [retrieve-k] [rerank-k] [--verbose]
+#   ./scripts/pipeline_retrieve_only.sh [query] [retrieve-k] [rerank-k] [--verbose] [--cpu|--vulkan]
 #   (No query starts interactive mode)
 #
 # Optional environment variables:
@@ -31,10 +31,20 @@ set -euo pipefail
 
 VERBOSE=0
 INTERACTIVE=0
+CLI_BACKEND=""
+CLI_ACCELERATION=""
 POSITIONAL_ARGS=()
 for arg in "$@"; do
   case "$arg" in
     --verbose) VERBOSE=1 ;;
+    --cpu)
+      CLI_BACKEND="torch"
+      CLI_ACCELERATION="cpu"
+      ;;
+    --vulkan)
+      CLI_BACKEND="vulkan"
+      CLI_ACCELERATION="gpu"
+      ;;
     *) POSITIONAL_ARGS+=("$arg") ;;
   esac
 done
@@ -69,6 +79,13 @@ RERANKER_GGUF_FILE="${RETRIEVER_RERANKER_GGUF_FILE:-bge-reranker-v2-m3-Q2_K.gguf
 AUTO_DOWNLOAD_MODEL="${RETRIEVER_AUTO_DOWNLOAD_MODEL:-1}"
 ACCELERATION_MODE="${RETRIEVER_ACCELERATION:-auto}"
 HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-${HUGGINGFACE_TOKEN:-}}}"
+
+if [[ -n "$CLI_BACKEND" ]]; then
+  BACKEND="$CLI_BACKEND"
+fi
+if [[ -n "$CLI_ACCELERATION" ]]; then
+  ACCELERATION_MODE="$CLI_ACCELERATION"
+fi
 
 # Support llama.cpp shorthand "repo:QUANT" (e.g. gpustack/bge-reranker-v2-m3-GGUF:Q2_K)
 if [[ "$RERANKER_GGUF_REPO" == *:* ]]; then
@@ -313,6 +330,12 @@ configure_acceleration() {
   GPU_FLAGS=()
   DEVICE_ARGS=(--device cpu --cpu-only)
   GPU_RUNTIME_KIND="none"
+
+  if [[ "$ACCELERATION_MODE" == "cpu" ]]; then
+    GGML_BACKEND_DESIRED="cpu"
+    BUILD_ARGS+=(--build-arg GGML_BACKEND=cpu)
+    return
+  fi
 
   # macOS: Vulkan acceleration via libkrun + virtio-gpu + Mesa Venus.
   # The libkrun VM exposes /dev/dri inside the VM; podman does NOT forward it to
