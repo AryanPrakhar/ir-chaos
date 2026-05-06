@@ -33,6 +33,57 @@ DEFAULT_LLAMA_GPU_LAYERS = int(os.environ.get("LLAMA_GPU_LAYERS", "-1"))
 DEFAULT_LLAMA_RERANKER_MODEL = os.environ.get("LLAMA_RERANKER_MODEL", "")
 
 
+def probe_vulkan_devices():
+    """
+    Return a list of dicts [{name, software}] describing available Vulkan devices.
+    Requires vulkaninfo (vulkan-tools package). Returns [] if not available.
+    """
+    devices = []
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["vulkaninfo", "--summary"],
+            capture_output=True, text=True, timeout=8
+        )
+        for line in (r.stdout + r.stderr).splitlines():
+            s = line.strip()
+            if "deviceName" in s and "=" in s:
+                name = s.split("=", 1)[1].strip()
+                name_lower = name.lower()
+                is_sw = any(
+                    sw in name_lower
+                    for sw in (
+                        "llvmpipe",
+                        "lavapipe",
+                        "softpipe",
+                        "swrast",
+                        "swiftshader",
+                    )
+                )
+                devices.append({"index": len(devices), "name": name, "software": is_sw})
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        print(f"vulkaninfo probe failed: {exc}", file=sys.stderr)
+    return devices
+
+
+def _log_vulkan_device_status(devices):
+    if not devices:
+        print("Warning: vulkaninfo not available; cannot confirm Vulkan GPU device.")
+        return
+    hw = [d for d in devices if not d["software"]]
+    if hw:
+        idx = hw[0].get("index", 0)
+        print(f"Vulkan hardware device active: {hw[0]['name']} (index={idx})")
+    else:
+        sw_names = ", ".join(d["name"] for d in devices)
+        print(
+            f"Warning: Vulkan is using a software renderer ({sw_names}) — "
+            "no GPU acceleration. Ensure /dev/dri is forwarded and libkrun machine is running."
+        )
+
+
 def score_to_match(ce_score: float, faiss_score: float) -> float:
     ce_sigmoid = 1.0 / (1.0 + np.exp(-float(ce_score)))
     faiss = max(0.0, min(1.0, float(faiss_score)))
@@ -117,18 +168,30 @@ NON_SCENARIO_DOCS = {
 class LlamaCppReranker:
     """Reranker implementation that uses llama.cpp GGUF reranking on Vulkan."""
 
-    def __init__(self, model_path: str, n_gpu_layers: int = -1):
+    def __init__(self, model_path: str, n_gpu_layers: int = -1, main_gpu: int | None = None):
         from llama_cpp import Llama
 
         self.model_path = model_path
-        n_gpu_layers = -1
-        self._llm = Llama(
-            model_path=model_path,
-            embedding=False,
-            n_gpu_layers=n_gpu_layers,
-            verbose=True,
-            reranking=True,
-        )
+        # Removed the hardcoded n_gpu_layers = -1
+        llama_kwargs = {
+            "model_path": model_path,
+            "embedding": False,
+            "n_gpu_layers": n_gpu_layers,
+            "verbose": n_gpu_layers != 0,
+            "reranking": True,
+        }
+        if main_gpu is not None and n_gpu_layers != 0:
+            llama_kwargs["main_gpu"] = int(main_gpu)
+
+        try:
+            self._llm = Llama(**llama_kwargs)
+        except TypeError:
+            # Some builds of llama-cpp-python may not accept `main_gpu`.
+            if "main_gpu" in llama_kwargs:
+                llama_kwargs.pop("main_gpu", None)
+                self._llm = Llama(**llama_kwargs)
+            else:
+                raise
 
     @staticmethod
     def _to_logit(relevance_score: float) -> float:
@@ -357,19 +420,66 @@ class LlamaVulkanRanker:
         self.cross_encoder_model_name = cross_encoder_model
         self.retriever_model_name = f"llama.cpp embedding ({Path(model_path).name})"
         self.model_path = model_path
-        self.gpu_layers = -1
         self.device = "vulkan"
         self.device_preference = device_preference
         self.cpu_only = cpu_only
         self.rerank_device = resolve_device(device_preference=device_preference, cpu_only=cpu_only)
         self.reranker_model_path = reranker_model_path
 
-        self.llm = Llama(
-            model_path=self.model_path,
-            embedding=True,
-            n_gpu_layers=self.gpu_layers,
-            verbose=True,
-        )
+        # Probe devices FIRST before initializing the Llama model
+        self._vulkan_devices = probe_vulkan_devices()
+        _log_vulkan_device_status(self._vulkan_devices)
+
+        # Determine if a hardware GPU is actually present
+        hw_devices = [d for d in self._vulkan_devices if not d["software"]]
+        self._has_hw_gpu = len(hw_devices) > 0
+
+        # Prefer the first non-software device if multiple ICDs are present.
+        self.vulkan_main_gpu = hw_devices[0].get("index") if self._has_hw_gpu else None
+
+        # Force full offload only when a real hardware Vulkan device is present.
+        if self.cpu_only or not self._has_hw_gpu:
+            reason = "CPU_ONLY enabled" if self.cpu_only else "no Vulkan hardware GPU detected"
+            print(f"Vulkan offload disabled ({reason}); running llama.cpp on CPU (gpu_layers=0).")
+            self.embedding_gpu_layers = 0
+            self.reranker_gpu_layers = 0
+        else:
+            self.embedding_gpu_layers = -1
+            self.reranker_gpu_layers = -1
+
+        # Back-compat: older code expects `gpu_layers`.
+        self.gpu_layers = self.embedding_gpu_layers
+
+        llama_kwargs = {
+            "model_path": self.model_path,
+            "embedding": True,
+            "n_gpu_layers": self.embedding_gpu_layers,
+            "verbose": self.embedding_gpu_layers != 0,
+        }
+        if self.vulkan_main_gpu is not None and self.embedding_gpu_layers != 0:
+            llama_kwargs["main_gpu"] = int(self.vulkan_main_gpu)
+
+        try:
+            self.llm = Llama(**llama_kwargs)
+        except TypeError:
+            # Some builds of llama-cpp-python may not accept `main_gpu`.
+            if "main_gpu" in llama_kwargs:
+                llama_kwargs.pop("main_gpu", None)
+                self.llm = Llama(**llama_kwargs)
+            else:
+                raise
+        except Exception as exc:
+            if self.embedding_gpu_layers != 0:
+                print(f"Warning: llama.cpp Vulkan init failed; retrying on CPU (gpu_layers=0): {exc}")
+                self.embedding_gpu_layers = 0
+                self.reranker_gpu_layers = 0
+                self.gpu_layers = 0
+                llama_kwargs["n_gpu_layers"] = 0
+                llama_kwargs["verbose"] = False
+                llama_kwargs.pop("main_gpu", None)
+                self.llm = Llama(**llama_kwargs)
+            else:
+                raise
 
         self.faiss_index = None
         self.doc_ids = []
@@ -377,7 +487,8 @@ class LlamaVulkanRanker:
         self.cross_encoder = None
 
         print(
-            f"Using backend: vulkan (model={self.model_path}, n_gpu_layers={self.gpu_layers}, "
+            f"Using backend: vulkan (model={self.model_path}, embed_gpu_layers={self.embedding_gpu_layers}, "
+            f"reranker_gpu_layers={self.reranker_gpu_layers}, main_gpu={self.vulkan_main_gpu}, "
             f"reranker={self.cross_encoder_model_name}, rerank_device={self.rerank_device}, "
             f"llama_reranker={self.reranker_model_path or 'disabled'})"
         )
@@ -389,11 +500,30 @@ class LlamaVulkanRanker:
             return
         if self.reranker_model_path and Path(self.reranker_model_path).exists():
             print(f"Loading llama.cpp reranker model: {Path(self.reranker_model_path).name}")
-            self.cross_encoder = LlamaCppReranker(
-                model_path=self.reranker_model_path,
-                n_gpu_layers=self.gpu_layers,
-            )
-            return
+            try:
+                self.cross_encoder = LlamaCppReranker(
+                    model_path=self.reranker_model_path,
+                    n_gpu_layers=self.reranker_gpu_layers,
+                    main_gpu=self.vulkan_main_gpu,
+                )
+                return
+            except Exception as exc:
+                if self.reranker_gpu_layers != 0:
+                    print(f"Warning: llama.cpp reranker GPU init failed; retrying on CPU (gpu_layers=0): {exc}")
+                    self.reranker_gpu_layers = 0
+                    try:
+                        self.cross_encoder = LlamaCppReranker(
+                            model_path=self.reranker_model_path,
+                            n_gpu_layers=0,
+                            main_gpu=None,
+                        )
+                        return
+                    except Exception as exc2:
+                        print(f"Warning: llama.cpp reranker CPU init failed: {exc2}")
+
+                print("llama.cpp reranker unavailable; falling back to FlagReranker on CPU")
+                self.cross_encoder = FlagReranker(self.cross_encoder_model_name, use_fp16=False)
+                return
 
         print("llama.cpp reranker model missing; falling back to FlagReranker on CPU")
         self.cross_encoder = FlagReranker(self.cross_encoder_model_name, use_fp16=False)
