@@ -17,31 +17,28 @@ RUN dnf -y install --setopt=install_weak_deps=False \
       spirv-headers-devel && \
     dnf clean all
 
-# Intercept glslc capability probes by checking shader file content.
-# cmake writes tiny test shaders to /tmp and compiles them to detect
-# driver features. We read those files and fail if they use extensions
-# that cause broken shader compilation on this platform.
+# Wrap glslc to block problematic shader capability probes
 RUN mv /usr/bin/glslc /usr/bin/glslc.real && \
-    cat > /usr/bin/glslc << 'EOF'
-#!/bin/bash
-for arg in "$@"; do
-  case "$arg" in
-    /tmp/*)
-      if [ -f "$arg" ] && grep -qiE \
-        "cooperative_matrix|CooperativeMatrix|NV_cooperative|integer_dot_product|bfloat16|BFloat16" \
-        "$arg" 2>/dev/null; then
-        exit 1
-      fi
-      ;;
-  esac
-done
-exec /usr/bin/glslc.real "$@"
-EOF
-chmod +x /usr/bin/glslc
+    printf '%s\n' \
+'#!/bin/bash' \
+'' \
+'for arg in "$@"; do' \
+'  case "$arg" in' \
+'    /tmp/*)' \
+'      if [ -f "$arg" ] && grep -qiE "cooperative_matrix|CooperativeMatrix|NV_cooperative|integer_dot_product|bfloat16|BFloat16" "$arg" 2>/dev/null; then' \
+'        exit 1' \
+'      fi' \
+'      ;;' \
+'  esac' \
+'done' \
+'' \
+'exec /usr/bin/glslc.real "$@"' \
+> /usr/bin/glslc && \
+    chmod +x /usr/bin/glslc
 
 RUN pip install --upgrade pip setuptools wheel && \
     CMAKE_ARGS="-DGGML_VULKAN=on" FORCE_CMAKE=1 \
-      pip install --no-binary=llama-cpp-python llama-cpp-python && \
+      pip install --no-binary=llama-cpp-python "llama-cpp-python==0.3.19" && \
     if [ "$TORCH_BUILD" = "cuda" ]; then \
       pip install --index-url "$TORCH_CUDA_INDEX_URL" torch; \
     else \
@@ -57,6 +54,7 @@ RUN pip install --upgrade pip setuptools wheel && \
       FlagEmbedding==1.2.3 \
       requests
 
+# Restore original glslc
 RUN mv /usr/bin/glslc.real /usr/bin/glslc
 
 COPY krkn-retriever/ /app/
@@ -65,4 +63,5 @@ COPY docs/ /app/docs/
 ENV GGML_BACKEND_BUILT=vulkan
 
 EXPOSE 8080
+
 CMD ["python3", "api_server.py"]
