@@ -538,10 +538,12 @@ class LlamaVulkanRanker:
                 row["final_score"] = score_to_match(row["score"], row["retrieval_score"])
             results = sorted(results, key=lambda x: x["final_score"], reverse=True)
         except Exception as exc:
-            print(f"Reranker failed on backend={self.rerank_device}, falling back to cosine scores: {exc}")
-            results = sorted(candidates, key=lambda x: x["retrieval_score"], reverse=True)
-            for row in results:
-                row["final_score"] = row["retrieval_score"]
+            import traceback
+            traceback.print_exc()
+
+            raise RuntimeError(
+                f"Reranker failed on backend={self.rerank_device}: {exc}"
+            ) from exc
 
         if results:
             top_match = score_to_match(
