@@ -28,6 +28,7 @@ from retriever import (
     FINAL_FAISS_WEIGHT,
     get_ranker,
     reset_ranker,
+    probe_vulkan_devices,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -323,17 +324,42 @@ def acceleration_status():
                 detail="Vulkan backend requires LLAMA_EMBED_MODEL",
             )
         try:
+            # Use cached device list from ranker if available, else probe now.
+            vulkan_devices = getattr(ranker, "_vulkan_devices", None)
+            if vulkan_devices is None:
+                vulkan_devices = probe_vulkan_devices()
+
+            hw_devices = [d for d in vulkan_devices if not d.get("software")]
+            has_hw_gpu = len(hw_devices) > 0
+
+            backend_status["vulkan_devices"] = vulkan_devices
+            backend_status["hardware_acceleration"] = has_hw_gpu
+            backend_status["vulkan_main_gpu"] = getattr(ranker, "vulkan_main_gpu", None)
+
+            selected_name = None
+            main_gpu = backend_status["vulkan_main_gpu"]
+            if main_gpu is not None:
+                for d in vulkan_devices:
+                    if d.get("index") == main_gpu:
+                        selected_name = d.get("name")
+                        break
+            backend_status["vulkan_selected_device"] = selected_name
+
+            embedding_layers = getattr(ranker, "embedding_gpu_layers", getattr(ranker, "gpu_layers", 0))
+            reranker_layers = getattr(ranker, "reranker_gpu_layers", getattr(ranker, "gpu_layers", 0))
+            backend_status["embedding_gpu_layers"] = embedding_layers
+            backend_status["reranker_gpu_layers"] = reranker_layers
+
             if hasattr(ranker, "llm"):
-                _ = ranker.llm
-                backend_status["embedding_gpu"] = True
+                backend_status["embedding_gpu"] = bool(has_hw_gpu and int(embedding_layers) != 0)
                 backend_status["embedding_model_loaded"] = True
-                backend_status["embedding_backend"] = "vulkan"
+                backend_status["embedding_backend"] = "vulkan" if backend_status["embedding_gpu"] else "cpu"
 
                 if hasattr(ranker, "cross_encoder"):
                     if hasattr(ranker.cross_encoder, "_llm"):
-                        backend_status["reranker_gpu"] = True
+                        backend_status["reranker_gpu"] = bool(has_hw_gpu and int(reranker_layers) != 0)
                         backend_status["reranker_type"] = "llama_cpp"
-                        backend_status["reranker_backend"] = "vulkan"
+                        backend_status["reranker_backend"] = "vulkan" if backend_status["reranker_gpu"] else "cpu"
                     else:
                         backend_status["reranker_gpu"] = False
                         backend_status["reranker_type"] = "flag_reranker"

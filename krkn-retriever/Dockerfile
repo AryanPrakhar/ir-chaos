@@ -10,6 +10,7 @@ RUN dnf -y install --setopt=install_weak_deps=False \
       gcc gcc-c++ cmake ninja-build make pkgconf-pkg-config \
       vulkan-loader vulkan-loader-devel vulkan-headers \
       mesa-vulkan-drivers glslc \
+      vulkan-tools \
       spirv-headers-devel && \
     dnf clean all
 
