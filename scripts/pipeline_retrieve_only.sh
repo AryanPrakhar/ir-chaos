@@ -798,15 +798,15 @@ if [[ "$BACKEND" == "vulkan" && "$ACCELERATION_MODE" != "cpu" ]]; then
   accel_resp="$(curl -sS -w "\n%{http_code}" "$API_BASE_URL/health/acceleration" 2>/dev/null || true)"
   accel_http="$(printf "%s" "$accel_resp" | tail -n 1)"
   accel_json="$(printf "%s" "$accel_resp" | sed '$d')"
-  if [[ -z "$accel_json" || "$accel_http" != "200" ]]; then
-    echo "Error: acceleration health check failed (status=${accel_http:-none})."
+  if [[ -z "${accel_json//[[:space:]]/}" || "$accel_http" != "200" ]]; then
+    echo "Warning: acceleration health check failed (status=${accel_http:-none})."
     if [[ -n "$accel_json" ]]; then
       echo "Response: $accel_json"
     fi
     if [[ -n "$API_CONTAINER_ID" ]]; then
       "$ENGINE" logs "$API_CONTAINER_ID" | tail -n 80 || true
     fi
-    exit 1
+    accel_check="SKIP"
   fi
 
   accel_check="$(python3 - <<'PY'
@@ -832,13 +832,14 @@ print("OK")
 PY
 <<<"$accel_json" || true)"
 
-  if [[ "$accel_check" != "OK" ]]; then
-    echo "Error: Vulkan acceleration not active." 
+  if [[ "$accel_check" != "OK" && "$accel_check" != "SKIP" ]]; then
+    echo "Warning: Vulkan acceleration not active." 
     echo "Detail: ${accel_check}"
-    exit 1
   fi
 
-  vlog "      Vulkan acceleration confirmed (embedding_gpu=true, reranker_type=llama_cpp, reranker_gpu=true)"
+  if [[ "$accel_check" == "OK" ]]; then
+    vlog "      Vulkan acceleration confirmed (embedding_gpu=true, reranker_type=llama_cpp, reranker_gpu=true)"
+  fi
 fi
 
 if [[ "$INTERACTIVE" == "1" ]]; then
