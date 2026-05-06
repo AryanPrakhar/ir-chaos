@@ -822,75 +822,7 @@ if ! wait_for_api_ready; then
   exit 1
 fi
 
-if [[ "$BACKEND" == "vulkan" && "$ACCELERATION_MODE" != "cpu" ]]; then
-  accel_check=""
-  accel_resp="$(curl -sS -H "Accept: application/json" --max-time 3 -w "\n%{http_code}" "$API_BASE_URL/health/acceleration" 2>/dev/null || true)"
-  accel_http="$(printf "%s" "$accel_resp" | tail -n 1)"
-  accel_json="$(printf "%s" "$accel_resp" | sed '$d')"
 
-  accel_trimmed="$(printf "%s" "$accel_json" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-  if [[ -z "$accel_trimmed" || "$accel_http" != "200" ]]; then
-    echo "Warning: acceleration health check failed (status=${accel_http:-none})."
-    if [[ -n "$accel_trimmed" ]]; then
-      echo "Response: $accel_trimmed"
-    fi
-    if [[ -n "$API_CONTAINER_ID" ]]; then
-      "$ENGINE" logs "$API_CONTAINER_ID" | tail -n 80 || true
-    fi
-    accel_check="SKIP"
-  fi
-
-  if [[ "$accel_check" != "SKIP" ]]; then
-    if [[ "$accel_trimmed" != "{"* && "$accel_trimmed" != "["* ]]; then
-      echo "Warning: acceleration health check returned non-JSON (status=${accel_http:-none})."
-      echo "Response (first 200 chars): ${accel_trimmed:0:200}"
-      if [[ -n "$API_CONTAINER_ID" ]]; then
-        "$ENGINE" logs "$API_CONTAINER_ID" | tail -n 80 || true
-      fi
-      accel_check="SKIP"
-    fi
-  fi
-
-  if [[ "$accel_check" != "SKIP" ]]; then
-    accel_check="$(python3 - <<'PY'
-import json
-import sys
-
-raw = sys.stdin.read()
-try:
-    payload = json.loads(raw)
-except Exception as exc:
-    print(f"ERROR: invalid_json: {exc}")
-    raise SystemExit(1)
-
-errors = []
-if payload.get("backend") != "vulkan":
-    errors.append(f"backend={payload.get('backend')}")
-if not payload.get("embedding_gpu"):
-    errors.append("embedding_gpu=false")
-if payload.get("reranker_type") != "llama_cpp":
-    errors.append(f"reranker_type={payload.get('reranker_type')}")
-if not payload.get("reranker_gpu"):
-    errors.append("reranker_gpu=false")
-
-if errors:
-    print("ERROR: " + "; ".join(errors))
-    raise SystemExit(1)
-
-print("OK")
-PY
-<<<"$accel_trimmed" || true)"
-  fi
-
-  if [[ "$accel_check" != "OK" && "$accel_check" != "SKIP" ]]; then
-    echo "Warning: Vulkan acceleration not active." 
-    echo "Detail: ${accel_check}"
-  fi
-
-  if [[ "$accel_check" == "OK" ]]; then
-    vlog "      Vulkan acceleration confirmed (embedding_gpu=true, reranker_type=llama_cpp, reranker_gpu=true)"
-  fi
-fi
 
 if [[ "$INTERACTIVE" == "1" ]]; then
   echo ""
