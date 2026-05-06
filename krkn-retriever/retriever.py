@@ -171,14 +171,20 @@ class CrossEncoderRanker:
             print(f"Loading Cross-Encoder: {self.cross_encoder_model_name}")
             use_fp16 = self.device == "cuda"
             try:
-                self.cross_encoder = FlagReranker(
-                    self.cross_encoder_model_name,
-                    use_fp16=use_fp16,
-                    devices=self.device,
-                )
-            except TypeError:
-                # Older FlagEmbedding versions do not accept `devices`.
-                self.cross_encoder = FlagReranker(self.cross_encoder_model_name, use_fp16=use_fp16)
+                devices = None
+                if self.device in ("cuda", "mps"):
+                    devices = [self.device]
+                if devices:
+                    self.cross_encoder = FlagReranker(
+                        self.cross_encoder_model_name,
+                        use_fp16=use_fp16,
+                        devices=devices,
+                    )
+                else:
+                    self.cross_encoder = FlagReranker(self.cross_encoder_model_name, use_fp16=use_fp16)
+            except Exception as exc:
+                print(f"Cross-Encoder init failed ({exc}); falling back to CPU")
+                self.cross_encoder = FlagReranker(self.cross_encoder_model_name, use_fp16=False)
 
         if self.retriever is None:
             print(f"Loading Qwen Embedding Model: {self.retriever_model_name}")
@@ -190,19 +196,19 @@ class CrossEncoderRanker:
             print("Retriever loaded successfully")
 
     def get_embedding(self, text, is_query=False):
-            if is_query:
-                embedding = self.retriever.encode(
-                    text, 
-                    prompt_name="query", 
-                    normalize_embeddings=True
-                )
-            else:
-                embedding = self.retriever.encode(
-                    text, 
-                    normalize_embeddings=True
-                )
-                
-            return embedding.astype(np.float32)
+        if is_query:
+            embedding = self.retriever.encode(
+                text,
+                prompt_name="query",
+                normalize_embeddings=True,
+            )
+        else:
+            embedding = self.retriever.encode(
+                text,
+                normalize_embeddings=True,
+            )
+
+        return embedding.astype(np.float32)
 
     def _load_index(self):
         if Path(INDEX_PATH).exists() and Path(META_PATH).exists():
@@ -298,9 +304,13 @@ class CrossEncoderRanker:
         rerank_start = time.perf_counter()
         pairs = [[query, self.prepare_for_reranking(c["text"])] for c in candidates]
         batch_size = 16 if self.device == "cuda" else 8
-        ce_scores = self.cross_encoder.compute_score(pairs, batch_size=batch_size)
+        try:
+            ce_scores = self.cross_encoder.compute_score(pairs, batch_size=batch_size)
+        except Exception as exc:
+            raise RuntimeError(f"Reranker failed: {exc}") from exc
         rerank_ms = (time.perf_counter() - rerank_start) * 1000
 
+        results = []
         top_ce_score = max((float(s) for s in ce_scores), default=float("-inf"))
         if top_ce_score < MIN_CE_SCORE:
             print(f"No matching scenarios (top Cross-Encoder score {top_ce_score:.4f} < {MIN_CE_SCORE:.1f}).")
@@ -308,15 +318,13 @@ class CrossEncoderRanker:
             print(f"Timing: retrieval={retrieval_ms:.1f}ms | rerank={rerank_ms:.1f}ms | total={total_ms:.1f}ms")
             return []
 
-        results = []
         for i, ce_score in enumerate(ce_scores):
             results.append({
                 "id": candidates[i]["id"],
                 "name": candidates[i]["id"].replace("-", " ").title(),
                 "score": float(ce_score),
-                "retrieval_score": candidates[i]["retrieval_score"]
+                "retrieval_score": candidates[i]["retrieval_score"],
             })
-
         for row in results:
             row["final_score"] = score_to_match(row["score"], row["retrieval_score"])
 

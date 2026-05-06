@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from typing import List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from retriever import (
     DOCS_DIR,
@@ -83,9 +83,9 @@ class QueryResponse(BaseModel):
     choices: List[QueryChoice]
     usage: Usage
     scenario_name: Optional[str] = None
-    scenario_names: List[str] = []
-    clear_answers: List[dict] = []
-    results: List[dict] = []
+    scenario_names: List[str] = Field(default_factory=list)
+    clear_answers: List[dict] = Field(default_factory=list)
+    results: List[dict] = Field(default_factory=list)
 
 
 class ScenarioQueryRequest(BaseModel):
@@ -97,16 +97,16 @@ class ScenarioQueryRequest(BaseModel):
 class ScenarioQueryResponse(BaseModel):
     query: str
     scenario_name: Optional[str] = None
-    scenario_names: List[str] = []
-    clear_answers: List[dict] = []
-    results: List[dict] = []
+    scenario_names: List[str] = Field(default_factory=list)
+    clear_answers: List[dict] = Field(default_factory=list)
+    results: List[dict] = Field(default_factory=list)
 
 
 class CompactQueryResponse(BaseModel):
     answer: str
-    scenario_names: List[str] = []
-    clear_answers: List[dict] = []
-    results: List[dict] = []
+    scenario_names: List[str] = Field(default_factory=list)
+    clear_answers: List[dict] = Field(default_factory=list)
+    results: List[dict] = Field(default_factory=list)
 
 
 class RetrieveRequest(BaseModel):
@@ -167,7 +167,7 @@ def _clear_answers(results: List[dict]) -> List[dict]:
     clear = results[:1]
     if len(results) >= 2:
         faiss_gap = abs(results[0]["retrieval_score"] - results[1]["retrieval_score"])
-        ce_gap = abs(results[0]["score"] - results[1]["score"])
+        ce_gap = abs(float(results[0].get("score", 0.0)) - float(results[1].get("score", 0.0)))
         if faiss_gap < FAISS_TOP2_GAP_THRESHOLD or ce_gap < CE_TOP2_GAP_THRESHOLD:
             clear = results[:2]
     return clear
@@ -412,13 +412,19 @@ async def retrieve(request: RetrieveRequest):
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-    k_retrieve = request.k or request.retrieve_k or RETRIEVE_K
+    k_retrieve = request.retrieve_k or RETRIEVE_K
     k_rerank = request.rerank_k or RERANK_K
+    k_final = request.k or k_rerank
+    if k_final < 1:
+        raise HTTPException(status_code=400, detail="k must be >= 1")
+    if k_retrieve < k_final:
+        k_retrieve = k_final
     results, elapsed_ms, cache_hit = _rank_with_cache(
         query,
         k_retrieve,
         k_rerank,
     )
+    results = results[:k_final]
     clean_results = [
         RetrieveResult(
             id=row["id"],
