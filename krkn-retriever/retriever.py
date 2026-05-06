@@ -394,13 +394,12 @@ class LlamaVulkanRanker:
     def _init_models(self):
         if self.cross_encoder is not None:
             return
-        if self.reranker_model_path and Path(self.reranker_model_path).exists():
-            print(f"Loading llama.cpp reranker model: {Path(self.reranker_model_path).name}")
-            self.cross_encoder = LlamaCppReranker(
-                model_path=self.reranker_model_path,
-                n_gpu_layers=self.gpu_layers,
-            )
-            return
+        print("Using FlagReranker fallback for reranking")
+        self.cross_encoder = FlagReranker(
+            self.cross_encoder_model_name,
+            use_fp16=False
+        )
+        return
 
         print("llama.cpp reranker model missing; falling back to FlagReranker on CPU")
         self.cross_encoder = FlagReranker(self.cross_encoder_model_name, use_fp16=False)
