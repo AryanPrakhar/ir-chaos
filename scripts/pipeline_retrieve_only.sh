@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Retrieval-only pipeline: retrieves and reranks results without inference
-# CROSS-PLATFORM: Linux (native podman) + macOS (podman machine + libkrun)
+# krkn-assist pipeline: retrieves and reranks results
 #
 # Usage:
 #   ./scripts/pipeline_retrieve_only.sh [query] [retrieve-k] [rerank-k] [--verbose]
@@ -34,6 +33,10 @@ set -euo pipefail
 
 VERBOSE=0
 INTERACTIVE=0
+QUERY_MS=0
+BUILD_MS=0
+INDEX_MS=0
+TOTAL_MS=0
 POSITIONAL_ARGS=()
 for arg in "$@"; do
   case "$arg" in
@@ -704,21 +707,12 @@ configure_acceleration
 
 if [[ "$VERBOSE" == "1" ]]; then
   echo "========================================"
-  echo "Krkn Retrieval-Only Pipeline"
+  echo "Krkn Assist Pipeline"
   echo "========================================"
   echo "Query: ${QUERY:-<interactive>}"
   echo "Retrieve-K: $RETRIEVE_K  |  Rerank-K: $RERANK_K"
   echo "Engine: $ENGINE  |  Image: $IMAGE"
   echo "Host OS: $HOST_OS  |  Backend: $BACKEND"
-  echo "Acceleration: $ACCELERATION_MODE  |  GPU runtime: $GPU_RUNTIME_KIND"
-  echo "Embedding acceleration: ${GPU_RUNTIME_KIND}"
-  echo "Reranker acceleration: cpu (ONNX Runtime; Vulkan/MPS unavailable in Linux container)"
-  echo "Cross encoder: $CROSS_ENCODER_MODEL"
-  echo "Rerank max length: $RERANK_MAX_LENGTH  |  candidates: ${RERANK_CANDIDATE_K:-0}=0 means rerank-k"
-  echo "LLAMA_EMBED_MODEL: ${LLAMA_EMBED_MODEL_PATH:-<not-set>}"
-  echo "LLAMA_RERANKER_MODEL: ${LLAMA_RERANKER_MODEL_PATH:-<not-set>}"
-  echo "Build args: ${BUILD_ARGS[*]:-<none>}"
-  echo "Output: $SHARED_DIR/retrieval_output.json"
   echo "========================================"
   echo ""
 fi
@@ -748,15 +742,7 @@ STEP_END_MS="$(now_ms)"
 BUILD_MS="$((STEP_END_MS - STEP_START_MS))"
 vlog "      Step time: ${BUILD_MS}ms"
 if [[ "$VERBOSE" == "1" ]]; then
-  echo "      Torch runtime in image:"
-  image_torch_runtime | sed 's/^/        /'
-fi
-
-vlog "      Device args: ${DEVICE_ARGS[*]}"
-if [[ -n "${GPU_FLAGS+x}" ]] && [[ ${#GPU_FLAGS[@]} -gt 0 ]]; then
-  vlog "      GPU flags: ${GPU_FLAGS[*]} (${GPU_RUNTIME_KIND})"
-else
-  vlog "      GPU flags: disabled"
+  echo "      Image ready"
 fi
 
 # ── [2/3] Ensure FAISS index ──
@@ -862,62 +848,10 @@ if [[ "$VERBOSE" == "1" ]]; then
   echo "[verbose] Step timings"
   echo "[1/3] Building retriever container image   (${BUILD_MS}ms)"
   echo "[2/3] Ensuring FAISS index exists          (${INDEX_MS}ms)"
-  echo "[3/3] Running retrieval and reranking      (${QUERY_MS}ms)"
+  if [[ "$QUERY_MS" -gt 0 ]]; then
+    echo "[3/3] Running retrieval and reranking      (${QUERY_MS}ms)"
+  else
+    echo "[3/3] Running retrieval and reranking      (skipped)"
+  fi
   echo "Total elapsed: ${TOTAL_MS}ms"
-  if [[ -f "$SHARED_DIR/retrieval_output.json" ]]; then
-    python3 - "$SHARED_DIR/retrieval_output.json" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-if not path.exists():
-    raise SystemExit(0)
-
-payload = json.loads(path.read_text(encoding="utf-8"))
-results = payload.get("results", [])
-if not results:
-    raise SystemExit(0)
-
-def fmt(values):
-    return "  ".join(f"{v:>7.4f}" for v in values)
-
-ce_scores = [float(r.get("rerank_score", r.get("score", 0.0))) for r in results]
-faiss_scores = [float(r.get("retrieval_score", 0.0)) for r in results]
-hybrid_scores = [float(r.get("final_score", 0.0)) for r in results]
-timing = results[0].get("timing_ms", {}) if results else {}
-print("")
-print(f"  CE scores:  {fmt(ce_scores)}")
-print(f"  FAISS:      {fmt(faiss_scores)}")
-print(f"  Hybrid:     {fmt(hybrid_scores)}")
-if timing:
-    print(
-        "  Model ms:   "
-        f"retrieve={timing.get('retrieve', '?')}  "
-        f"rerank={timing.get('rerank', '?')}  "
-        f"total={timing.get('total', '?')}  "
-        f"reranked={timing.get('reranked', '?')}"
-    )
-PY
-  fi
-  echo ""
-  echo "[verbose] Retriever command output"
-  cat "$QUERY_LOG"
-  if [[ "$INTERACTIVE" == "1" ]]; then
-    echo ""
-    echo "[verbose] Interactive mode ran with pipeline scoring/UI per query."
-  fi
 fi
-
-
-
-  # configure_acceleration() for macOS:                                            
-  # - GPU_FLAGS=(--device /dev/dri) — forwards the virtio-gpu DRM nodes from the libkrun VM into the 
-  # container. Without this, Mesa has no hardware device and falls back to llvmpipe (CPU renderer).  
-  # - DEVICE_ARGS=(--device auto) — clears the --device cpu --cpu-only that was being passed to      
-  # retriever.py, which was overriding Vulkan and forcing CPU execution.                             
-                                                                                                   
-  # CONTAINERS_MACHINE_PROVIDER export:
-  # - Automatically sets CONTAINERS_MACHINE_PROVIDER=libkrun for all podman commands in the script   
-  # when on macOS, so podman targets the correct libkrun machine instead of silently using applehv.  
-  # Respects an explicit override if already set in the environment. 
