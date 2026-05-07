@@ -545,7 +545,7 @@ PY
   echo "  Searching ${doc_count} scenarios...  done in ${seconds_display}s"
   echo ""
 
-  python3 - "$output_path" <<'PY'
+  python3 - "$output_path" "$VERBOSE" <<'PY'
 import json, math, sys
 from pathlib import Path
 
@@ -553,6 +553,7 @@ FAISS_GAP = 0.07
 CE_GAP = 1.0
 
 path = Path(sys.argv[1])
+verbose = sys.argv[2] == "1"
 if not path.exists():
     print("  No matching scenario")
     raise SystemExit(0)
@@ -637,6 +638,17 @@ for idx, row in enumerate(best, 1):
     print(f"  {CYAN}│{RESET}{c_opt}{c_act}{c_fit}{c_mat}{CYAN}│{RESET}")
 
 print(bottom_border)
+
+if verbose:
+    timing = results[0].get("timing_ms", {}) if results else {}
+    if timing:
+        print(
+            "\n  Model ms: "
+            f"retrieve={timing.get('retrieve', '?')}  "
+            f"rerank={timing.get('rerank', '?')}  "
+            f"total={timing.get('total', '?')}  "
+            f"reranked={timing.get('reranked', '?')}"
+        )
 PY
 
 }
