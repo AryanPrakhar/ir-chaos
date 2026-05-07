@@ -17,7 +17,10 @@ import faiss
 # onnxruntime / transformers: used by OnnxCrossEncoder (reranker, both paths)
 
 # ── constants ───────────────────────────────────────────────────────────────
-CROSS_ENCODER_MODEL = "BAAI/bge-reranker-base"
+CROSS_ENCODER_MODEL = os.environ.get(
+    "CROSS_ENCODER_MODEL",
+    "cross-encoder/ms-marco-MiniLM-L-6-v2",
+)
 RETRIEVER_MODEL     = "Qwen/Qwen3-Embedding-0.6B"
 
 MIN_FAISS_SCORE          = 0.23
@@ -28,6 +31,12 @@ FINAL_FAISS_WEIGHT       = 0.2
 MIN_QUERY_WORDS          = 4
 MIN_CE_SCORE             = -9.0
 MIN_MATCH_SCORE          = float(os.environ.get("MIN_MATCH_SCORE", "0.10"))
+RERANK_MAX_LENGTH        = int(os.environ.get("RERANK_MAX_LENGTH", "192"))
+RERANK_BATCH_SIZE        = int(os.environ.get("RERANK_BATCH_SIZE", "16"))
+RERANK_DOC_CHARS         = int(os.environ.get("RERANK_DOC_CHARS", "1800"))
+RERANK_THREADS           = int(os.environ.get("RERANK_THREADS", str(min(4, os.cpu_count() or 4))))
+RERANK_CANDIDATE_K       = int(os.environ.get("RERANK_CANDIDATE_K", "0"))
+RERANK_ONNX_QUANTIZE     = os.environ.get("RERANK_ONNX_QUANTIZE", "1") == "1"
 
 DEFAULT_BACKEND              = os.environ.get("RETRIEVER_BACKEND", "auto")
 DEFAULT_LLAMA_MODEL          = os.environ.get("LLAMA_EMBED_MODEL", "")
@@ -134,6 +143,7 @@ class OnnxCrossEncoder:
         self._tokenizer = None
         self._hf_model  = None   # transformers fallback
         self._backend   = None   # "onnx" | "transformers"
+        self._input_names = set()
         self._init()
 
     def _onnx_model_dir(self) -> Path:
@@ -150,25 +160,36 @@ class OnnxCrossEncoder:
 
             onnx_dir  = self._onnx_model_dir()
             onnx_file = onnx_dir / "model.onnx"
+            runtime_file = onnx_dir / "model-int8.onnx"
 
             if not onnx_file.exists():
                 print(f"Exporting {self.model_name} to ONNX (one-time)…")
                 self._export_to_onnx(onnx_dir)
 
             if onnx_file.exists():
+                if RERANK_ONNX_QUANTIZE:
+                    runtime_file = self._quantize_onnx(onnx_file, runtime_file)
+                else:
+                    runtime_file = onnx_file
+
                 opts = ort.SessionOptions()
-                opts.intra_op_num_threads    = os.cpu_count() or 4
+                opts.intra_op_num_threads    = max(1, RERANK_THREADS)
+                opts.inter_op_num_threads    = 1
                 opts.graph_optimization_level = (
                     ort.GraphOptimizationLevel.ORT_ENABLE_ALL
                 )
-                # Add "VulkanExecutionProvider" here when onnxruntime ships it.
                 self._session = ort.InferenceSession(
-                    str(onnx_file),
+                    str(runtime_file),
                     sess_options=opts,
                     providers=["CPUExecutionProvider"],
                 )
+                self._input_names = {inp.name for inp in self._session.get_inputs()}
                 self._backend = "onnx"
-                print(f"Reranker: ONNX Runtime ({self.model_name})")
+                print(
+                    f"Reranker: ONNX Runtime CPU ({self.model_name}, "
+                    f"max_len={RERANK_MAX_LENGTH}, threads={RERANK_THREADS}, "
+                    f"int8={runtime_file.name.endswith('int8.onnx')})"
+                )
                 return
         except Exception as exc:
             print(f"ONNX path failed ({exc}); using transformers fallback")
@@ -199,25 +220,44 @@ class OnnxCrossEncoder:
             ).eval()
             dummy = self._tokenizer(
                 "query", "document",
-                return_tensors="pt", truncation=True, max_length=512,
+                return_tensors="pt", truncation=True, max_length=RERANK_MAX_LENGTH,
             )
+            input_names = ["input_ids", "attention_mask"]
+            model_args = [dummy["input_ids"], dummy["attention_mask"]]
+            dynamic_axes = {
+                "input_ids":      {0: "batch", 1: "seq"},
+                "attention_mask": {0: "batch", 1: "seq"},
+                "logits":         {0: "batch"},
+            }
+            if "token_type_ids" in dummy:
+                input_names.append("token_type_ids")
+                model_args.append(dummy["token_type_ids"])
+                dynamic_axes["token_type_ids"] = {0: "batch", 1: "seq"}
             out_dir.mkdir(parents=True, exist_ok=True)
             torch.onnx.export(
                 hf,
-                (dummy["input_ids"], dummy["attention_mask"]),
+                tuple(model_args),
                 str(out_dir / "model.onnx"),
-                input_names=["input_ids", "attention_mask"],
+                input_names=input_names,
                 output_names=["logits"],
-                dynamic_axes={
-                    "input_ids":      {0: "batch", 1: "seq"},
-                    "attention_mask": {0: "batch", 1: "seq"},
-                    "logits":         {0: "batch"},
-                },
+                dynamic_axes=dynamic_axes,
                 opset_version=14,
             )
             print("ONNX export: torch.onnx succeeded")
         except Exception as exc:
             print(f"torch.onnx export failed ({exc}); ONNX unavailable")
+
+    def _quantize_onnx(self, src: Path, dst: Path) -> Path:
+        if dst.exists():
+            return dst
+        try:
+            from onnxruntime.quantization import QuantType, quantize_dynamic
+            quantize_dynamic(str(src), str(dst), weight_type=QuantType.QInt8)
+            print("ONNX quantization: dynamic int8 succeeded")
+            return dst
+        except Exception as exc:
+            print(f"ONNX quantization failed ({exc}); using fp32 model")
+            return src
 
     def _load_transformers_model(self):
         try:
@@ -235,7 +275,8 @@ class OnnxCrossEncoder:
 
     # public API ────────────────────────────────────────────────────────────
 
-    def compute_score(self, pairs: list, batch_size: int = 16) -> list:
+    def compute_score(self, pairs: list, batch_size: int = None) -> list:
+        batch_size = batch_size or RERANK_BATCH_SIZE
         if self._backend == "onnx":
             return self._score_onnx(pairs, batch_size)
         return self._score_transformers(pairs, batch_size)
@@ -248,15 +289,13 @@ class OnnxCrossEncoder:
             docs    = [p[1] for p in batch]
             enc = self._tokenizer(
                 queries, docs,
-                padding=True, truncation=True, max_length=512,
+                padding=True, truncation=True, max_length=RERANK_MAX_LENGTH,
                 return_tensors="np",
             )
-            ort_in = {
-                "input_ids":      enc["input_ids"].astype(np.int64),
-                "attention_mask": enc["attention_mask"].astype(np.int64),
-            }
-            if "token_type_ids" in enc:
-                ort_in["token_type_ids"] = enc["token_type_ids"].astype(np.int64)
+            ort_in = {}
+            for name in self._input_names:
+                if name in enc:
+                    ort_in[name] = enc[name].astype(np.int64)
             logits = self._session.run(None, ort_in)[0]  # (batch, labels)
             if logits.ndim == 2 and logits.shape[1] == 2:
                 # [irrelevant, relevant] -> relevance logit
@@ -277,7 +316,7 @@ class OnnxCrossEncoder:
                 docs    = [p[1] for p in batch]
                 enc = self._tokenizer(
                     queries, docs,
-                    padding=True, truncation=True, max_length=512,
+                    padding=True, truncation=True, max_length=RERANK_MAX_LENGTH,
                     return_tensors="pt",
                 ).to(dev)
                 logits = self._hf_model(**enc).logits
@@ -551,6 +590,17 @@ class LlamaVulkanRanker:
 
 # ── shared retrieval + reranking core ────────────────────────────────────────
 
+def _compact_for_reranking(text: str) -> str:
+    text = re.sub(r"\n{3,}", "\n\n", text or "").strip()
+    if RERANK_DOC_CHARS > 0 and len(text) > RERANK_DOC_CHARS:
+        head = text[:RERANK_DOC_CHARS]
+        last_break = max(head.rfind("\n"), head.rfind(". "), head.rfind(" "))
+        if last_break > 300:
+            head = head[:last_break]
+        return head
+    return text
+
+
 def _find_match_impl(
     query: str,
     retrieve_k: int,
@@ -591,13 +641,17 @@ def _find_match_impl(
         return []
 
     # Stage 2 ─────────────────────────────────────────────────────────────────
+    expensive_k = RERANK_CANDIDATE_K if RERANK_CANDIDATE_K > 0 else rerank_k
+    expensive_k = max(1, min(len(candidates), expensive_k))
+    candidates = candidates[:expensive_k]
+
     t_rerank = time.perf_counter()
     pairs = [
-        [query, re.sub(r"\n{3,}", "\n\n", c["text"])]
+        [query, _compact_for_reranking(c["text"])]
         for c in candidates
     ]
     try:
-        ce_scores = reranker.compute_score(pairs, batch_size=16)
+        ce_scores = reranker.compute_score(pairs, batch_size=RERANK_BATCH_SIZE)
     except Exception as exc:
         raise RuntimeError(f"Reranker failed: {exc}") from exc
     rerank_ms = (time.perf_counter() - t_rerank) * 1000
@@ -643,9 +697,17 @@ def _find_match_impl(
     total_ms = (time.perf_counter() - t_search) * 1000
     print(
         f"Timing: ret={ret_ms:.0f}ms  rerank={rerank_ms:.0f}ms  "
-        f"total={total_ms:.0f}ms  top={top_final:.3f}"
+        f"total={total_ms:.0f}ms  reranked={len(candidates)}  top={top_final:.3f}"
     )
-    return results[:rerank_k]
+    final = results[:rerank_k]
+    for row in final:
+        row["timing_ms"] = {
+            "retrieve": int(round(ret_ms)),
+            "rerank": int(round(rerank_ms)),
+            "total": int(round(total_ms)),
+            "reranked": len(candidates),
+        }
+    return final
 
 
 # ── ranker singleton ──────────────────────────────────────────────────────────

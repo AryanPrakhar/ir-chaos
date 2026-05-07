@@ -9,7 +9,7 @@ import logging
 import math
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -123,6 +123,7 @@ class RetrieveResult(BaseModel):
     rerank_score: float
     final_score: float
     score_percent: float
+    timing_ms: Optional[Dict[str, int]] = None
 
 
 class RetrieveResponse(BaseModel):
@@ -292,6 +293,8 @@ async def health_check():
     return {
         "status": "healthy",
         "backend": BACKEND,
+        "reranker_acceleration": "cpu",
+        "reranker_note": "ONNX/Torch reranking has no Vulkan or MPS backend inside this Linux container",
         "index_loaded": ranker.faiss_index is not None,
         "documents_indexed": len(ranker.doc_ids),
     }
@@ -433,6 +436,7 @@ async def retrieve(request: RetrieveRequest):
             rerank_score=round(float(row.get("score", 0.0)), 4),
             final_score=round(_display_score(row), 4),
             score_percent=round(_display_score(row) * 100.0, 1),
+            timing_ms=row.get("timing_ms"),
         )
         for row in results
     ]

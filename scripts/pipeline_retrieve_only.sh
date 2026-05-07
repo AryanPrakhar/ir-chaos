@@ -22,6 +22,9 @@ set -euo pipefail
 #   RETRIEVER_RERANKER_GGUF_REPO=gpustack/bge-reranker-v2-m3-GGUF  (ignored: ONNX reranker used)
 #   RETRIEVER_RERANKER_GGUF_FILE=bge-reranker-v2-m3-Q2_K.gguf       (ignored: ONNX reranker used)
 #   RETRIEVER_AUTO_DOWNLOAD_MODEL=1
+#   CROSS_ENCODER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+#   RERANK_MAX_LENGTH=192
+#   RERANK_CANDIDATE_K=0       # 0 means use rerank-k as the expensive CE window
 #   RETRIEVER_FORCE_BUILD=1
 #   HF_TOKEN / HUGGING_FACE_HUB_TOKEN (optional, for gated HF downloads)
 #   HF_CACHE_DIR, TORCH_CACHE_DIR
@@ -72,6 +75,13 @@ RERANKER_GGUF_FILE="${RETRIEVER_RERANKER_GGUF_FILE:-bge-reranker-v2-m3-Q2_K.gguf
 AUTO_DOWNLOAD_MODEL="${RETRIEVER_AUTO_DOWNLOAD_MODEL:-1}"
 ACCELERATION_MODE="${RETRIEVER_ACCELERATION:-auto}"
 HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-${HUGGINGFACE_TOKEN:-}}}"
+CROSS_ENCODER_MODEL="${CROSS_ENCODER_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}"
+RERANK_MAX_LENGTH="${RERANK_MAX_LENGTH:-192}"
+RERANK_BATCH_SIZE="${RERANK_BATCH_SIZE:-16}"
+RERANK_DOC_CHARS="${RERANK_DOC_CHARS:-1800}"
+RERANK_THREADS="${RERANK_THREADS:-4}"
+RERANK_CANDIDATE_K="${RERANK_CANDIDATE_K:-0}"
+RERANK_ONNX_QUANTIZE="${RERANK_ONNX_QUANTIZE:-1}"
 
 # Support llama.cpp shorthand "repo:QUANT" (e.g. gpustack/bge-reranker-v2-m3-GGUF:Q2_K)
 if [[ "$RERANKER_GGUF_REPO" == *:* ]]; then
@@ -418,6 +428,13 @@ start_api_standby() {
         -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
         -e DOCS_DIR=/app/docs \
         -e RETRIEVER_BACKEND="$BACKEND" \
+        -e CROSS_ENCODER_MODEL="$CROSS_ENCODER_MODEL" \
+        -e RERANK_MAX_LENGTH="$RERANK_MAX_LENGTH" \
+        -e RERANK_BATCH_SIZE="$RERANK_BATCH_SIZE" \
+        -e RERANK_DOC_CHARS="$RERANK_DOC_CHARS" \
+        -e RERANK_THREADS="$RERANK_THREADS" \
+        -e RERANK_CANDIDATE_K="$RERANK_CANDIDATE_K" \
+        -e RERANK_ONNX_QUANTIZE="$RERANK_ONNX_QUANTIZE" \
         -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
         -e LLAMA_RERANKER_MODEL="$LLAMA_RERANKER_MODEL_PATH" \
         -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
@@ -440,6 +457,13 @@ start_api_standby() {
         -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
         -e DOCS_DIR=/app/docs \
         -e RETRIEVER_BACKEND="$BACKEND" \
+        -e CROSS_ENCODER_MODEL="$CROSS_ENCODER_MODEL" \
+        -e RERANK_MAX_LENGTH="$RERANK_MAX_LENGTH" \
+        -e RERANK_BATCH_SIZE="$RERANK_BATCH_SIZE" \
+        -e RERANK_DOC_CHARS="$RERANK_DOC_CHARS" \
+        -e RERANK_THREADS="$RERANK_THREADS" \
+        -e RERANK_CANDIDATE_K="$RERANK_CANDIDATE_K" \
+        -e RERANK_ONNX_QUANTIZE="$RERANK_ONNX_QUANTIZE" \
         -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
         -e LLAMA_RERANKER_MODEL="$LLAMA_RERANKER_MODEL_PATH" \
         -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
@@ -637,24 +661,15 @@ if [[ "$BACKEND" == "vulkan" ]]; then
   if [[ -z "$LLAMA_EMBED_MODEL_PATH" ]]; then
     LLAMA_EMBED_MODEL_PATH="$ROOT_DIR/models/$GGUF_FILE"
   fi
-  if [[ -z "$LLAMA_RERANKER_MODEL_PATH" ]]; then
-    LLAMA_RERANKER_MODEL_PATH="$ROOT_DIR/models/$RERANKER_GGUF_FILE"
-  fi
 
-  if [[ (! -f "$LLAMA_EMBED_MODEL_PATH" || ! -f "$LLAMA_RERANKER_MODEL_PATH") && "$AUTO_DOWNLOAD_MODEL" == "1" ]]; then
+  if [[ ! -f "$LLAMA_EMBED_MODEL_PATH" && "$AUTO_DOWNLOAD_MODEL" == "1" ]]; then
     if ! command -v curl >/dev/null 2>&1; then
-      echo "Error: curl is required to auto-download GGUF models"; exit 1
+      echo "Error: curl is required to auto-download the GGUF embedding model"; exit 1
     fi
   fi
 
   if [[ ! -f "$LLAMA_EMBED_MODEL_PATH" && "$AUTO_DOWNLOAD_MODEL" == "1" ]]; then
     download_gguf_model "$LLAMA_EMBED_MODEL_PATH"
-  fi
-  if [[ ! -f "$LLAMA_RERANKER_MODEL_PATH" && "$AUTO_DOWNLOAD_MODEL" == "1" ]]; then
-    if ! download_reranker_gguf_model "$LLAMA_RERANKER_MODEL_PATH"; then
-      echo "Warning: failed to download GGUF reranker (${RERANKER_GGUF_REPO}/${RERANKER_GGUF_FILE})."
-      echo "         Falling back to FlagReranker (CPU) unless LLAMA_RERANKER_MODEL is provided."
-    fi
   fi
 
   if [[ ! -f "$LLAMA_EMBED_MODEL_PATH" ]]; then
@@ -663,31 +678,12 @@ if [[ "$BACKEND" == "vulkan" ]]; then
     echo "       Set LLAMA_EMBED_MODEL or keep RETRIEVER_AUTO_DOWNLOAD_MODEL=1"
     exit 1
   fi
-  if [[ ! -f "$LLAMA_RERANKER_MODEL_PATH" ]]; then
-    LLAMA_RERANKER_MODEL_PATH=""
-  fi
+  LLAMA_RERANKER_MODEL_PATH=""
 
   LLAMA_MODEL_ABS="$(cd "$(dirname "$LLAMA_EMBED_MODEL_PATH")" && pwd)/$(basename "$LLAMA_EMBED_MODEL_PATH")"
   LLAMA_MODEL_BASENAME="$(basename "$LLAMA_MODEL_ABS")"
-  if [[ -n "$LLAMA_RERANKER_MODEL_PATH" ]]; then
-    RERANKER_MODEL_ABS="$(cd "$(dirname "$LLAMA_RERANKER_MODEL_PATH")" && pwd)/$(basename "$LLAMA_RERANKER_MODEL_PATH")"
-    RERANKER_MODEL_BASENAME="$(basename "$RERANKER_MODEL_ABS")"
-    if [[ "$(dirname "$LLAMA_MODEL_ABS")" == "$(dirname "$RERANKER_MODEL_ABS")" ]]; then
-      LLAMA_EMBED_MODEL_PATH="/models/$LLAMA_MODEL_BASENAME"
-      LLAMA_RERANKER_MODEL_PATH="/models/$RERANKER_MODEL_BASENAME"
-      LLAMA_MOUNT_ARGS=(-v "$(dirname "$LLAMA_MODEL_ABS"):/models$MOUNT_LABEL_SUFFIX")
-    else
-      LLAMA_EMBED_MODEL_PATH="/models-embed/$LLAMA_MODEL_BASENAME"
-      LLAMA_RERANKER_MODEL_PATH="/models-reranker/$RERANKER_MODEL_BASENAME"
-      LLAMA_MOUNT_ARGS=(
-        -v "$(dirname "$LLAMA_MODEL_ABS"):/models-embed$MOUNT_LABEL_SUFFIX"
-        -v "$(dirname "$RERANKER_MODEL_ABS"):/models-reranker$MOUNT_LABEL_SUFFIX"
-      )
-    fi
-  else
-    LLAMA_EMBED_MODEL_PATH="/models/$LLAMA_MODEL_BASENAME"
-    LLAMA_MOUNT_ARGS=(-v "$(dirname "$LLAMA_MODEL_ABS"):/models$MOUNT_LABEL_SUFFIX")
-  fi
+  LLAMA_EMBED_MODEL_PATH="/models/$LLAMA_MODEL_BASENAME"
+  LLAMA_MOUNT_ARGS=(-v "$(dirname "$LLAMA_MODEL_ABS"):/models$MOUNT_LABEL_SUFFIX")
 fi
 
 # ── Configure acceleration (sets BUILD_ARGS, GPU_FLAGS, DEVICE_ARGS) ──
@@ -703,6 +699,10 @@ if [[ "$VERBOSE" == "1" ]]; then
   echo "Engine: $ENGINE  |  Image: $IMAGE"
   echo "Host OS: $HOST_OS  |  Backend: $BACKEND"
   echo "Acceleration: $ACCELERATION_MODE  |  GPU runtime: $GPU_RUNTIME_KIND"
+  echo "Embedding acceleration: ${GPU_RUNTIME_KIND}"
+  echo "Reranker acceleration: cpu (ONNX Runtime; Vulkan/MPS unavailable in Linux container)"
+  echo "Cross encoder: $CROSS_ENCODER_MODEL"
+  echo "Rerank max length: $RERANK_MAX_LENGTH  |  candidates: ${RERANK_CANDIDATE_K:-0}=0 means rerank-k"
   echo "LLAMA_EMBED_MODEL: ${LLAMA_EMBED_MODEL_PATH:-<not-set>}"
   echo "LLAMA_RERANKER_MODEL: ${LLAMA_RERANKER_MODEL_PATH:-<not-set>}"
   echo "Build args: ${BUILD_ARGS[*]:-<none>}"
@@ -763,6 +763,13 @@ else
     -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
     -e DOCS_DIR=/app/docs \
     -e RETRIEVER_BACKEND="$BACKEND" \
+    -e CROSS_ENCODER_MODEL="$CROSS_ENCODER_MODEL" \
+    -e RERANK_MAX_LENGTH="$RERANK_MAX_LENGTH" \
+    -e RERANK_BATCH_SIZE="$RERANK_BATCH_SIZE" \
+    -e RERANK_DOC_CHARS="$RERANK_DOC_CHARS" \
+    -e RERANK_THREADS="$RERANK_THREADS" \
+    -e RERANK_CANDIDATE_K="$RERANK_CANDIDATE_K" \
+    -e RERANK_ONNX_QUANTIZE="$RERANK_ONNX_QUANTIZE" \
     -e LLAMA_EMBED_MODEL="$LLAMA_EMBED_MODEL_PATH" \
     -e LLAMA_RERANKER_MODEL="$LLAMA_RERANKER_MODEL_PATH" \
     -e LLAMA_GPU_LAYERS="$LLAMA_GPU_LAYERS" \
@@ -866,10 +873,19 @@ def fmt(values):
 ce_scores = [float(r.get("rerank_score", r.get("score", 0.0))) for r in results]
 faiss_scores = [float(r.get("retrieval_score", 0.0)) for r in results]
 hybrid_scores = [float(r.get("final_score", 0.0)) for r in results]
+timing = results[0].get("timing_ms", {}) if results else {}
 print("")
 print(f"  CE scores:  {fmt(ce_scores)}")
 print(f"  FAISS:      {fmt(faiss_scores)}")
 print(f"  Hybrid:     {fmt(hybrid_scores)}")
+if timing:
+    print(
+        "  Model ms:   "
+        f"retrieve={timing.get('retrieve', '?')}  "
+        f"rerank={timing.get('rerank', '?')}  "
+        f"total={timing.get('total', '?')}  "
+        f"reranked={timing.get('reranked', '?')}"
+    )
 PY
   fi
   echo ""
