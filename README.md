@@ -26,3 +26,17 @@ Health check:
 ```
 curl http://127.0.0.1:18080/health | jq
 ```
+
+Quick sanity (after running ./scripts/pipeline.sh --verbose):
+
+Debug: 
+
+```
+curl -s -X POST http://127.0.0.1:18080/retrieve -H 'content-type: application/json' -d '{"query":"network latency between services","k":5,"rerank_k":3}' | jq
+```
+
+Compat: 
+
+```
+curl -s -X POST http://127.0.0.1:8080/v1/chat/completions -H 'content-type: application/json' -d '{"model":"krkn-retriever","messages":[{"role":"user","content":"network latency between services"}]}' | jq
+```
