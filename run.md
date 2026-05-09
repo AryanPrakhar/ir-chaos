@@ -66,6 +66,18 @@ RETRIEVER_TORCH_BUILD=cpu  RETRIEVER_FORCE_BUILD=1 ./scripts/pipeline_retrieve_o
 # pass extra image build args
 RETRIEVER_EXTRA_BUILD_ARGS='--build-arg KEY=VALUE' ./scripts/pipeline_retrieve_only.sh "your query" 5 3
 
+# use llama.cpp GGUF reranker preset (public)
+RETRIEVER_RERANKER_GGUF_REPO=gpustack/bge-reranker-v2-m3-GGUF \
+RETRIEVER_RERANKER_GGUF_FILE=bge-reranker-v2-m3-Q2_K.gguf \
+./scripts/pipeline_retrieve_only.sh "your query" 10 5
+
+# equivalent shorthand: repo:quant
+RETRIEVER_RERANKER_GGUF_REPO='gpustack/bge-reranker-v2-m3-GGUF:Q2_K' \
+./scripts/pipeline_retrieve_only.sh "your query" 10 5
+
+# optional token for gated/private HF repos
+HF_TOKEN=hf_xxx ./scripts/pipeline_retrieve_only.sh "your query" 10 5
+
 # use root Dockerfile instead of krkn-retriever/Dockerfile
 RETRIEVER_DOCKERFILE=./Dockerfile RETRIEVER_FORCE_BUILD=1 ./scripts/pipeline_retrieve_only.sh "your query" 5 3
 ```
@@ -73,7 +85,7 @@ RETRIEVER_DOCKERFILE=./Dockerfile RETRIEVER_FORCE_BUILD=1 ./scripts/pipeline_ret
 ## Manual Workflow (without pipeline script)
 
 ```bash
-podman build -t krkn-retriever:v1 -f ./krkn-retriever/Dockerfile .
+podman build -t krkn-retriever:fastapi -f ./krkn-retriever/Dockerfile .
 ```
 
 ```bash
@@ -82,7 +94,7 @@ podman run -it --rm \
   -v ./docs:/app/docs:Z \
   -v ~/.cache/huggingface:/root/.cache/huggingface:Z \
   -e DOCS_DIR=/app/docs \
-  krkn-retriever:v1 bash
+  krkn-retriever:fastapi bash
 ```
 
 Inside container:
@@ -98,3 +110,13 @@ Benchmark:
 ```bash
 python3 benchmark_retriever.py --dataset data.csv --retrieve-k 10 --rerank-k 5
 ```
+
+
+
+-----------
+
+
+
+curl -sS -X POST http://127.0.0.1:18080/retrieve \
+  -H 'content-type: application/json' \
+  -d '{"query":"kill the pods right now","k":10,"rerank_k":5}' | python3 -m json.tool

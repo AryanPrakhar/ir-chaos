@@ -4,12 +4,11 @@ import json
 import os
 import sys
 import time
+import urllib.request
+import urllib.error
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-
-from retriever import get_ranker
-
 
 @dataclass
 class BenchmarkResult:
@@ -35,7 +34,7 @@ class BenchmarkResult:
         rank = self.ranks.get(self.expected_label)
         return 0.0 if rank is None else 1.0 / rank
 
-def run_query(ranker, query, retrieve_k, rerank_k):
+def run_query_local(ranker, query, retrieve_k, rerank_k):
     start   = time.perf_counter()
     result  = ranker.find_match(query, retrieve_k=retrieve_k, rerank_k=rerank_k)
     latency = (time.perf_counter() - start) * 1000
@@ -46,14 +45,40 @@ def run_query(ranker, query, retrieve_k, rerank_k):
     return labels, scores, latency
 
 
-def benchmark(ranker, dataset_path, retrieve_k=10, rerank_k=3, limit=None):
+def run_query_api(api_url, query, retrieve_k, rerank_k, timeout_sec=30):
+    payload = json.dumps({
+        "query": query,
+        "retrieve_k": retrieve_k,
+        "rerank_k": rerank_k,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{api_url.rstrip('/')}/retrieve",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    start = time.perf_counter()
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        body = resp.read().decode("utf-8")
+    latency = (time.perf_counter() - start) * 1000
+    obj = json.loads(body)
+    results = obj.get("results", [])
+    labels = [r.get("id", "") for r in results]
+    scores = [float(r.get("rerank_score", r.get("score", 0.0))) for r in results]
+    return labels, scores, latency
+
+
+def benchmark(ranker, dataset_path, retrieve_k=10, rerank_k=3, limit=None, use_api=False, api_url="http://127.0.0.1:8080"):
     results = []
 
-    print("Initializing models + index...", file=sys.stderr)
-    start_init = time.perf_counter()
-    ranker._init_models()
-    ranker._load_doc_texts()
-    print(f"✓ Init done in {(time.perf_counter()-start_init):.2f}s", file=sys.stderr)
+    if not use_api:
+        print("Initializing models + index...", file=sys.stderr)
+        start_init = time.perf_counter()
+        ranker._init_models()
+        ranker._load_doc_texts()
+        print(f"✓ Init done in {(time.perf_counter()-start_init):.2f}s", file=sys.stderr)
+    else:
+        print(f"Using API mode: {api_url}", file=sys.stderr)
 
     with open(dataset_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -70,7 +95,10 @@ def benchmark(ranker, dataset_path, retrieve_k=10, rerank_k=3, limit=None):
             if not query or not label:
                 continue
 
-            labels, scores, latency = run_query(ranker, query, retrieve_k, rerank_k)
+            if use_api:
+                labels, scores, latency = run_query_api(api_url, query, retrieve_k, rerank_k)
+            else:
+                labels, scores, latency = run_query_local(ranker, query, retrieve_k, rerank_k)
             ranks = {l: i + 1 for i, l in enumerate(labels)}
 
             results.append(BenchmarkResult(
@@ -160,15 +188,15 @@ def save_failures(results, output_path="outputs/failed_queries.csv"):
     print(f"\nSaved {len(rows)} failed queries → {output_file}")
 
 
-def log_benchmark(results, metrics, ranker, output_path="outputs/benchmark_log.jsonl"):
+def log_benchmark(results, metrics, ranker, output_path="outputs/benchmark_log.jsonl", mode="local", api_url=None):
     if not metrics:
         return
 
     overall   = metrics["overall"]
     log_entry = {
         "timestamp":           datetime.now().isoformat(),
-        "retriever_model":     ranker.retriever_model_name,
-        "cross_encoder_model": ranker.cross_encoder_model_name,
+        "retriever_model":     getattr(ranker, "retriever_model_name", "api"),
+        "cross_encoder_model": getattr(ranker, "cross_encoder_model_name", "api"),
         "total_queries":       overall["total_queries"],
         "top1_accuracy":       overall["top1_accuracy"],
         "top1_count":          overall["top1_count"],
@@ -177,6 +205,8 @@ def log_benchmark(results, metrics, ranker, output_path="outputs/benchmark_log.j
         "mrr":                 overall["mrr"],
         "avg_latency_ms":      overall["avg_latency_ms"],
         "top_k":               overall["top_k"],
+        "mode":                mode,
+        "api_url":             api_url,
     }
 
     output_file = Path(output_path)
@@ -200,23 +230,30 @@ def main():
     parser.add_argument("--backend", choices=["auto", "torch", "vulkan"], default=os.environ.get("RETRIEVER_BACKEND", "auto"), help="Retrieval backend")
     parser.add_argument("--llama-model", default=os.environ.get("LLAMA_EMBED_MODEL", ""), help="Path to GGUF embedding model for vulkan backend")
     parser.add_argument("--llama-gpu-layers", type=int, default=int(os.environ.get("LLAMA_GPU_LAYERS", "-1")), help="llama.cpp n_gpu_layers for vulkan backend")
+    parser.add_argument("--mode", choices=["local", "api"], default=os.environ.get("BENCHMARK_MODE", "local"), help="Benchmark mode: local ranker or HTTP API")
+    parser.add_argument("--api-url", default=os.environ.get("RETRIEVER_API_URL", "http://127.0.0.1:8080"), help="Retriever API base URL for --mode api")
     args = parser.parse_args()
 
     bench_start = time.perf_counter()
 
-    ranker  = get_ranker(
-        device_preference=args.device,
-        cpu_only=args.cpu_only,
-        backend=args.backend,
-        llama_model_path=args.llama_model,
-        llama_gpu_layers=args.llama_gpu_layers,
-    )
+    ranker = None
+    if args.mode == "local":
+        from retriever import get_ranker
+        ranker = get_ranker(
+            device_preference=args.device,
+            cpu_only=args.cpu_only,
+            backend=args.backend,
+            llama_model_path=args.llama_model,
+            llama_gpu_layers=args.llama_gpu_layers,
+        )
     results = benchmark(
         ranker,
         args.dataset,
         retrieve_k=args.retrieve_k,
         rerank_k=args.rerank_k,
         limit=args.limit,
+        use_api=(args.mode == "api"),
+        api_url=args.api_url,
     )
 
     metrics = compute_metrics(results, args.rerank_k)
@@ -225,9 +262,14 @@ def main():
     print("\n" + "=" * 70)
     print("CROSS-ENCODER TWO-STAGE BENCHMARK RESULTS")
     print("=" * 70)
-    print(f"Retrieval Model:     {ranker.retriever_model_name}")
-    print(f"Cross-Encoder Model: {ranker.cross_encoder_model_name}")
-    print(f"Device:              {ranker.device}")
+    if args.mode == "local":
+        print(f"Retrieval Model:     {ranker.retriever_model_name}")
+        print(f"Cross-Encoder Model: {ranker.cross_encoder_model_name}")
+        print(f"Device:              {ranker.device}")
+    else:
+        print("Retrieval Model:     API")
+        print("Cross-Encoder Model: API")
+        print(f"Endpoint:            {args.api_url}")
     print(f"Retrieve K: {args.retrieve_k} | Rerank K: {args.rerank_k}")
     print(f"\nTotal Queries:    {overall['total_queries']}")
     print(f"Top-1 Accuracy:   {overall['top1_accuracy']:.1%} ({overall['top1_count']}/{overall['total_queries']})")
@@ -238,7 +280,7 @@ def main():
     print("=" * 70)
 
     save_failures(results, args.failures_out)
-    log_benchmark(results, metrics, ranker)
+    log_benchmark(results, metrics, ranker, mode=args.mode, api_url=(args.api_url if args.mode == "api" else None))
 
 
 if __name__ == "__main__":

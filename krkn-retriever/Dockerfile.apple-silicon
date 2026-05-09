@@ -1,37 +1,18 @@
-FROM --platform=linux/arm64 fedora:42
-
-USER 0
-
-# PRIORITY BLOCK: Install specialized libkrun Vulkan drivers and lock them
-RUN dnf -y install \
-        dnf-plugins-core \
-        dnf-plugin-versionlock && \
-    dnf -y copr enable slp/mesa-libkrun-vulkan && \
-    dnf -y install \
-        
-        mesa-vulkan-drivers.aarch64 \
-        vulkan-loader-devel.aarch64 \
-        vulkan-headers \
-        vulkan-tools.aarch64 \
-        vulkan-loader.aarch64 \
-        glslc && \
-    dnf versionlock add mesa-vulkan-drivers && \
-    dnf clean all
-
+FROM registry.fedoraproject.org/fedora:42
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 WORKDIR /app
-
 ARG GGML_BACKEND=vulkan
 ENV GGML_BACKEND_BUILT=vulkan
 ARG TORCH_BUILD=auto
 ARG TORCH_CUDA_INDEX_URL=https://download.pytorch.org/whl/cu126
 
-# SECONDARY BLOCK: Python, Build tools, and remaining dependencies
-# Note: Conflicting vulkan packages and glslc have been removed from here
 RUN dnf -y install --setopt=install_weak_deps=False \
       python3 python3-pip python3-devel \
       gcc gcc-c++ cmake ninja-build make pkgconf-pkg-config \
+      vulkan-loader vulkan-loader-devel vulkan-headers \
+      mesa-vulkan-drivers glslc \
+      vulkan-tools \
       spirv-headers-devel && \
     dnf clean all
 
