@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import argparse
 import csv
 import json
@@ -10,7 +12,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -22,7 +24,7 @@ class Sample:
     label: str
 
 
-def _percentile(values: list[float], p: float) -> float | None:
+def _percentile(values: list[float], p: float) -> Optional[float]:
     if not values:
         return None
     if p <= 0:
@@ -72,7 +74,7 @@ def _load_samples(csv_path: Path) -> list[Sample]:
         return samples
 
 
-def _rank_of(label: str, predicted_ids: list[str]) -> int | None:
+def _rank_of(label: str, predicted_ids: list[str]) -> Optional[int]:
     label = (label or "").strip()
     for idx, pred in enumerate(predicted_ids):
         if pred == label:
@@ -361,4 +363,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
