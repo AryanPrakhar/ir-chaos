@@ -1,0 +1,47 @@
+import os
+
+
+CROSS_ENCODER_MODEL = os.environ.get(
+    "CROSS_ENCODER_MODEL",
+    "cross-encoder/ms-marco-MiniLM-L-6-v2",
+)
+RETRIEVER_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+
+MIN_FAISS_SCORE = 0.23
+FAISS_TOP2_GAP_THRESHOLD = 0.07
+CE_TOP2_GAP_THRESHOLD = 1.0
+FINAL_CE_WEIGHT = 0.8
+FINAL_FAISS_WEIGHT = 0.2
+MIN_QUERY_WORDS = 4
+MIN_CE_SCORE = -9.0
+MIN_MATCH_SCORE = float(os.environ.get("MIN_MATCH_SCORE", "0.10"))
+
+RERANK_MAX_LENGTH = int(os.environ.get("RERANK_MAX_LENGTH", "192"))
+RERANK_BATCH_SIZE = int(os.environ.get("RERANK_BATCH_SIZE", "16"))
+RERANK_DOC_CHARS = int(os.environ.get("RERANK_DOC_CHARS", "1800"))
+RERANK_THREADS = int(
+    os.environ.get("RERANK_THREADS", str(min(4, os.cpu_count() or 4)))
+)
+RERANK_CANDIDATE_K = int(os.environ.get("RERANK_CANDIDATE_K", "0"))
+RERANK_ONNX_QUANTIZE = os.environ.get("RERANK_ONNX_QUANTIZE", "1") == "1"
+
+DEFAULT_BACKEND = os.environ.get("RETRIEVER_BACKEND", "auto")
+DEFAULT_DEVICE = os.environ.get("RETRIEVER_DEVICE", "auto")
+DEFAULT_CPU_ONLY = os.environ.get("RETRIEVER_CPU_ONLY", "0") == "1"
+DEFAULT_LLAMA_MODEL = os.environ.get("LLAMA_EMBED_MODEL", "")
+DEFAULT_LLAMA_GPU_LAYERS = int(os.environ.get("LLAMA_GPU_LAYERS", "-1"))
+
+DOCS_DIR = os.environ.get("DOCS_DIR", "../docs")
+INDEX_DIR = "faiss-index"
+INDEX_PATH = f"{INDEX_DIR}/krkn-scenarios.index"
+META_PATH = f"{INDEX_DIR}/krkn-scenarios.meta"
+
+NON_SCENARIO_DOCS = {
+    "all_scenarios_env.md",
+    "contribute.md",
+    "test_your_changes.md",
+    "error_cases.md",
+    "cerberus.md",
+    "chaos-recommender.md",
+    "aggregated_docs.md",
+}
