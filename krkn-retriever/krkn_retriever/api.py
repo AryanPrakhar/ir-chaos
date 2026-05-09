@@ -295,11 +295,7 @@ async def chat_completions(request: QueryRequest):
     current_time = int(time.time())
     response_id = f"chatcmpl-{current_time}"
 
-    response_content = (
-        f"Scenario: {scenario_name}"
-        if scenario_name
-        else "No matching chaos scenario found."
-    )
+    response_content = f"Scenario: {scenario_name}" if scenario_name else f"Query: {user_query}"
 
     prompt_tokens = len(user_query.split())
     completion_tokens = len(response_content.split())

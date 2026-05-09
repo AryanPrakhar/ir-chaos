@@ -199,7 +199,9 @@ vlog() {
 PIPELINE_LOG="$(mktemp)"
 QUERY_LOG=""
 API_CONTAINER_ID=""
-API_PORT="${RETRIEVER_API_PORT:-18080}"
+# Default to the same port krknctl expects (host:8080 -> container:8080).
+# Override with RETRIEVER_API_PORT if 8080 is already in use.
+API_PORT="${RETRIEVER_API_PORT:-8080}"
 API_BASE_URL="http://127.0.0.1:${API_PORT}"
 cleanup_logs() {
   rm -f "$PIPELINE_LOG"
