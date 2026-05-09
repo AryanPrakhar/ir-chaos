@@ -21,6 +21,7 @@ from .settings import (
     FINAL_FAISS_WEIGHT,
     INDEX_PATH,
     META_PATH,
+    MIN_MATCH_SCORE,
 )
 
 
@@ -36,6 +37,9 @@ RETRIEVE_K = int(os.environ.get("RETRIEVE_K", "10"))
 RERANK_K = int(os.environ.get("RERANK_K", "5"))
 FORCE_REINDEX = os.environ.get("FORCE_REINDEX", "false").lower() == "true"
 QUERY_CACHE_SIZE = int(os.environ.get("RETRIEVER_QUERY_CACHE_SIZE", "256"))
+RELEVANCE_THRESHOLD = float(os.environ.get("RELEVANCE_THRESHOLD", str(MIN_MATCH_SCORE)))
+SERVICE_NAME = os.environ.get("RETRIEVER_SERVICE_NAME", "krknctl-assist")
+SERVICE_MODEL = os.environ.get("RETRIEVER_SERVICE_MODEL", "krkn-retriever")
 
 ranker = None
 query_cache: OrderedDict[tuple[str, int, int], list[dict]] = OrderedDict()
@@ -63,6 +67,51 @@ class RetrieveResponse(BaseModel):
     results: list[RetrieveResult]
     top_match: Optional[str] = None
     message: str
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class QueryRequest(BaseModel):
+    model: str
+    messages: list[ChatMessage]
+    temperature: Optional[float] = 0.7
+    max_tokens: Optional[int] = 512
+    stream: Optional[bool] = False
+
+
+class QueryChoice(BaseModel):
+    index: int
+    message: ChatMessage
+    finish_reason: str
+
+
+class Usage(BaseModel):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+class QueryResponse(BaseModel):
+    id: str
+    object: str
+    created: int
+    model: str
+    choices: list[QueryChoice]
+    usage: Usage
+    scenario_name: Optional[str] = None
+
+
+class ScenarioQueryRequest(BaseModel):
+    query: str
+
+
+class ScenarioQueryResponse(BaseModel):
+    query: str
+    scenario_name: Optional[str] = None
+    relevance_score: Optional[float] = None
 
 
 def display_score(row: dict) -> float:
@@ -133,14 +182,27 @@ app = FastAPI(
 )
 
 
+def get_user_query_from_messages(messages: list[ChatMessage]) -> str:
+    for message in reversed(messages or []):
+        if message.role == "user":
+            return (message.content or "").strip()
+    return ""
+
+
 @app.get("/")
 async def root():
     return {
-        "service": "krkn-retriever",
+        "service": SERVICE_NAME,
+        "model": SERVICE_MODEL,
         "backend": BACKEND,
         "retrieve_k": RETRIEVE_K,
         "rerank_k": RERANK_K,
-        "endpoints": {"health": "/health", "retrieve": "/retrieve"},
+        "relevance_threshold": RELEVANCE_THRESHOLD,
+        "endpoints": {
+            "health": "/health",
+            "retrieve": "/retrieve",
+            "query": "/v1/chat/completions",
+        },
     }
 
 
@@ -148,11 +210,15 @@ async def root():
 async def health_check():
     if ranker is None:
         raise HTTPException(status_code=503, detail="Retriever not initialized")
+
+    documents_indexed = len(ranker.doc_ids) if getattr(ranker, "doc_ids", None) else 0
     return {
         "status": "healthy",
+        "service": SERVICE_NAME,
+        "model": SERVICE_MODEL,
         "backend": BACKEND,
         "index_loaded": ranker.faiss_index is not None,
-        "documents_indexed": len(ranker.doc_ids),
+        "documents_indexed": documents_indexed,
     }
 
 
@@ -194,6 +260,101 @@ async def retrieve(request: RetrieveRequest):
         results=payload,
         top_match=payload[0].id if payload else None,
         message=f"Found {len(payload)} relevant scenarios" if payload else "No matching chaos scenarios found",
+    )
+
+
+@app.post("/v1/chat/completions", response_model=QueryResponse)
+async def chat_completions(request: QueryRequest):
+    if ranker is None:
+        raise HTTPException(status_code=503, detail="Retriever not initialized")
+
+    if request.stream:
+        raise HTTPException(status_code=400, detail="Streaming not supported")
+
+    user_query = get_user_query_from_messages(request.messages)
+    if not user_query:
+        raise HTTPException(status_code=400, detail="No user message found in request")
+
+    results, elapsed_ms, cache_hit = rank_with_cache(user_query, RETRIEVE_K, RERANK_K)
+    top_match = results[0] if results else None
+    relevance_score = display_score(top_match) if top_match else 0.0
+
+    scenario_name: str | None = None
+    if top_match and relevance_score >= RELEVANCE_THRESHOLD:
+        scenario_name = str(top_match.get("id") or "").strip() or None
+
+    logger.info(
+        "chat_completion_time_ms=%d cache_hit=%s relevance_score=%.4f scenario=%s query=%s",
+        elapsed_ms,
+        cache_hit,
+        relevance_score,
+        scenario_name or "",
+        user_query[:120],
+    )
+
+    current_time = int(time.time())
+    response_id = f"chatcmpl-{current_time}"
+
+    response_content = (
+        f"Scenario: {scenario_name}"
+        if scenario_name
+        else "No matching chaos scenario found."
+    )
+
+    prompt_tokens = len(user_query.split())
+    completion_tokens = len(response_content.split())
+
+    return QueryResponse(
+        id=response_id,
+        object="chat.completion",
+        created=current_time,
+        model=request.model or SERVICE_MODEL,
+        choices=[
+            QueryChoice(
+                index=0,
+                message=ChatMessage(role="assistant", content=response_content),
+                finish_reason="stop",
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+        scenario_name=scenario_name,
+    )
+
+
+@app.post("/query", response_model=ScenarioQueryResponse)
+async def legacy_query(request: ScenarioQueryRequest):
+    if ranker is None:
+        raise HTTPException(status_code=503, detail="Retriever not initialized")
+
+    query = (request.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    results, elapsed_ms, cache_hit = rank_with_cache(query, RETRIEVE_K, RERANK_K)
+    top_match = results[0] if results else None
+    relevance_score = display_score(top_match) if top_match else 0.0
+
+    scenario_name: str | None = None
+    if top_match and relevance_score >= RELEVANCE_THRESHOLD:
+        scenario_name = str(top_match.get("id") or "").strip() or None
+
+    logger.info(
+        "legacy_query_time_ms=%d cache_hit=%s relevance_score=%.4f scenario=%s query=%s",
+        elapsed_ms,
+        cache_hit,
+        relevance_score,
+        scenario_name or "",
+        query[:120],
+    )
+
+    return ScenarioQueryResponse(
+        query=query,
+        scenario_name=scenario_name,
+        relevance_score=round(float(relevance_score), 4),
     )
 
 
