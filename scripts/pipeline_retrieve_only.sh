@@ -11,6 +11,8 @@ set -euo pipefail
 #   CONTAINER_ENGINE=podman|docker
 #   RETRIEVER_IMAGE=krkn-retriever:fastapi
 #   RETRIEVER_DOCKERFILE=/path/to/Dockerfile
+#   RETRIEVER_COMPAT_PORT=8080    # host port for /v1/chat/completions
+#   RETRIEVER_DEBUG_PORT=18080    # host port for /retrieve and /debug/*
 #   RETRIEVER_BACKEND=auto|torch|vulkan
 #   RETRIEVER_ACCELERATION=auto|gpu|cpu
 #   LLAMA_EMBED_MODEL=/abs/path/to/model.gguf
@@ -199,10 +201,12 @@ vlog() {
 PIPELINE_LOG="$(mktemp)"
 QUERY_LOG=""
 API_CONTAINER_ID=""
-# Default to the same port krknctl expects (host:8080 -> container:8080).
-# Override with RETRIEVER_API_PORT if 8080 is already in use.
-API_PORT="${RETRIEVER_API_PORT:-8080}"
-API_BASE_URL="http://127.0.0.1:${API_PORT}"
+# Debug API (internal) default: 18080
+# Compatibility API (public/krknctl) default: 8080
+DEBUG_PORT="${RETRIEVER_DEBUG_PORT:-${RETRIEVER_API_PORT:-18080}}"
+COMPAT_PORT="${RETRIEVER_COMPAT_PORT:-8080}"
+API_BASE_URL="http://127.0.0.1:${DEBUG_PORT}"
+COMPAT_BASE_URL="http://127.0.0.1:${COMPAT_PORT}"
 cleanup_logs() {
   rm -f "$PIPELINE_LOG"
   if [[ -n "$QUERY_LOG" ]]; then
@@ -426,7 +430,8 @@ start_api_standby() {
       "$ENGINE" run -d --rm \
         "${GPU_FLAGS[@]}" \
         "${run_args[@]}" \
-        -p "127.0.0.1:${API_PORT}:8080" \
+        -p "127.0.0.1:${COMPAT_PORT}:8080" \
+        -p "127.0.0.1:${DEBUG_PORT}:18080" \
         -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
         -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
         -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
@@ -455,7 +460,8 @@ start_api_standby() {
     container_id=$(
       "$ENGINE" run -d --rm \
         "${run_args[@]}" \
-        -p "127.0.0.1:${API_PORT}:8080" \
+        -p "127.0.0.1:${COMPAT_PORT}:8080" \
+        -p "127.0.0.1:${DEBUG_PORT}:18080" \
         -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
         -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
         -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
@@ -790,7 +796,8 @@ vlog ""
 vlog "[3/3] Running retrieval and reranking query"
 STEP_START_MS="$(now_ms)"
 QUERY_LOG="$(mktemp)"
-vlog "      Starting warm API service on $API_BASE_URL"
+  vlog "      Starting debug API service on $API_BASE_URL"
+  vlog "      Starting compat API service on $COMPAT_BASE_URL"
 if ! start_api_standby >>"$PIPELINE_LOG" 2>&1; then
   echo "Error: failed to start standby API container."
   tail -n 40 "$PIPELINE_LOG"

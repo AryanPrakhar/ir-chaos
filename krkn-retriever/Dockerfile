@@ -79,5 +79,5 @@ RUN if [ "$TORCH_BUILD" = "cuda" ]; then \
 COPY krkn-retriever/ /app/
 COPY docs/ /app/docs/
 
-EXPOSE 8080
+EXPOSE 8080 18080
 CMD ["python3", "api_server.py"]

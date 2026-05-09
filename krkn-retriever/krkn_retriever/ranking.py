@@ -8,22 +8,16 @@ import faiss
 import numpy as np
 
 from .settings import (
-    CE_TOP2_GAP_THRESHOLD,
     CROSS_ENCODER_MODEL,
     DEFAULT_BACKEND,
     DEFAULT_LLAMA_GPU_LAYERS,
     DEFAULT_LLAMA_MODEL,
     DOCS_DIR,
-    FAISS_TOP2_GAP_THRESHOLD,
     FINAL_CE_WEIGHT,
     FINAL_FAISS_WEIGHT,
     INDEX_DIR,
     INDEX_PATH,
     META_PATH,
-    MIN_CE_SCORE,
-    MIN_FAISS_SCORE,
-    MIN_MATCH_SCORE,
-    MIN_QUERY_WORDS,
     NON_SCENARIO_DOCS,
     RERANK_BATCH_SIZE,
     RERANK_CANDIDATE_K,
@@ -338,8 +332,6 @@ class BaseRanker:
     def find_match(self, query: str, retrieve_k: int = 10, rerank_k: int = 5) -> list[dict]:
         if self.faiss_index is None:
             raise RuntimeError("Index not found. Build it first.")
-        if len(query.split()) < MIN_QUERY_WORDS:
-            return []
         self._init_models()
         self._load_doc_texts()
         return run_retrieval(
@@ -473,7 +465,7 @@ def run_retrieval(
         }
         for offset, idx in enumerate(indices[0])
     ]
-    if not candidates or candidates[0]["retrieval_score"] < MIN_FAISS_SCORE:
+    if not candidates:
         return []
 
     expensive_k = RERANK_CANDIDATE_K if RERANK_CANDIDATE_K > 0 else rerank_k
@@ -483,8 +475,6 @@ def run_retrieval(
     pairs = [[query, compact_for_reranking(candidate["text"])] for candidate in candidates]
     rerank_scores = reranker.compute_score(pairs, batch_size=RERANK_BATCH_SIZE)
     rerank_ms = (time.perf_counter() - rerank_started) * 1000
-    if max((float(score) for score in rerank_scores), default=float("-inf")) < MIN_CE_SCORE:
-        return []
 
     results = [
         {
@@ -498,14 +488,6 @@ def run_retrieval(
     for row in results:
         row["final_score"] = score_to_match(row["score"], row["retrieval_score"])
     results.sort(key=lambda row: row["final_score"], reverse=True)
-    if results[0]["final_score"] < MIN_MATCH_SCORE:
-        return []
-
-    if len(results) >= 2:
-        faiss_gap = abs(results[0]["retrieval_score"] - results[1]["retrieval_score"])
-        ce_gap = abs(results[0]["score"] - results[1]["score"])
-        if faiss_gap < FAISS_TOP2_GAP_THRESHOLD or ce_gap < CE_TOP2_GAP_THRESHOLD:
-            rerank_k = max(rerank_k, 2)
 
     total_ms = (time.perf_counter() - started) * 1000
     final_results = results[:rerank_k]
