@@ -47,6 +47,8 @@ _init_lock = asyncio.Lock()
 
 
 def cache_get(cache_key: tuple[str, int, int]) -> list[dict] | None:
+    if QUERY_CACHE_SIZE <= 0:
+        return None
     cached = query_cache.get(cache_key)
     if cached is None:
         return None
@@ -55,10 +57,16 @@ def cache_get(cache_key: tuple[str, int, int]) -> list[dict] | None:
 
 
 def cache_put(cache_key: tuple[str, int, int], results: list[dict]) -> None:
+    if QUERY_CACHE_SIZE <= 0:
+        return
     query_cache[cache_key] = [dict(row) for row in results]
     query_cache.move_to_end(cache_key)
     while len(query_cache) > QUERY_CACHE_SIZE:
         query_cache.popitem(last=False)
+
+
+def clear_cache() -> None:
+    query_cache.clear()
 
 
 def rank_with_cache(query: str, retrieve_k: int, rerank_k: int) -> tuple[list[dict], int, bool]:

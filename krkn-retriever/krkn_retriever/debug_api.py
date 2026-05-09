@@ -166,3 +166,9 @@ async def debug_policy(request: RetrieveRequest):
         },
         "evidence": _format_debug_rows(evidence),
     }
+
+
+@app.post("/debug/cache/clear")
+async def debug_clear_cache():
+    service.clear_cache()
+    return {"cleared": True, "cache_size": 0}

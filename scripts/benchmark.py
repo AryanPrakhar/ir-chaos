@@ -169,6 +169,11 @@ def main() -> int:
         action="store_true",
         help="Include per-sample predictions in the JSON output (can be large)",
     )
+    parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Clear server query cache via debug endpoint before benchmarking",
+    )
 
     args = parser.parse_args()
 
@@ -190,6 +195,7 @@ def main() -> int:
     samples = samples[:total]
 
     endpoint = args.base_url.rstrip("/") + "/retrieve"
+    clear_cache_endpoint = args.base_url.rstrip("/") + "/debug/cache/clear"
     k = max(1, int(args.k))
     retrieve_k = max(int(args.retrieve_k), k)
     rerank_k = max(int(args.rerank_k), k)
@@ -207,6 +213,11 @@ def main() -> int:
     sample_rows: list[dict[str, Any]] = []
 
     started_wall = time.time()
+    if args.clear_cache:
+        try:
+            _http_post_json(clear_cache_endpoint, {}, timeout_s=float(args.timeout_s))
+        except Exception as exc:
+            print(f"Warning: failed to clear cache: {exc}", file=sys.stderr)
     for idx, sample in enumerate(samples, start=1):
         payload = {"query": sample.query, "k": k, "retrieve_k": retrieve_k, "rerank_k": rerank_k}
 
