@@ -33,6 +33,8 @@ from .settings import (
     KRKN_HUB_REPO,
     LOCAL_DOCS_PATH,
     META_PATH,
+    RERANK_SCORE_CEILING,
+    RERANK_SCORE_FLOOR,
     REPO_PATH,
     RERANK_BATCH_SIZE,
     RERANK_CANDIDATE_K,
@@ -41,6 +43,7 @@ from .settings import (
     RERANK_ONNX_QUANTIZE,
     RERANK_SUPPORT_PASSAGES,
     RERANK_THREADS,
+    RERANK_TOP_FRACTION,
     RETRIEVAL_CANDIDATE_K,
     RETRIEVER_MODEL,
     VECTOR_SEARCH_MULTIPLIER,
@@ -59,14 +62,14 @@ class IndexEntry:
 
 
 def score_to_match(ce_score: float, faiss_score: float, bm25_score: float) -> float:
-    ce_sigmoid = 1.0 / (1.0 + np.exp(-float(ce_score)))
+    ce_calibrated = calibrate_rerank_score(ce_score)
     faiss_score = max(0.0, min(1.0, float(faiss_score)))
     bm25_score = max(0.0, min(1.0, float(bm25_score)))
     weight_total = FINAL_CE_WEIGHT + FINAL_FAISS_WEIGHT + FINAL_BM25_WEIGHT
     if weight_total <= 0:
         return 0.0
     return (
-        (FINAL_CE_WEIGHT * ce_sigmoid)
+        (FINAL_CE_WEIGHT * ce_calibrated)
         + (FINAL_FAISS_WEIGHT * faiss_score)
         + (FINAL_BM25_WEIGHT * bm25_score)
     ) / weight_total
@@ -126,6 +129,15 @@ def _normalize_score(score: float, min_value: float, max_value: float) -> float:
     if max_value <= min_value:
         return 1.0 if score > 0 else 0.0
     return max(0.0, min(1.0, (score - min_value) / (max_value - min_value)))
+
+
+def calibrate_rerank_score(score: float) -> float:
+    # Normalize the cross-encoder logit into [0, 1] using the observed score floor.
+    floor = float(RERANK_SCORE_FLOOR)
+    ceiling = float(RERANK_SCORE_CEILING)
+    if ceiling <= floor:
+        return 1.0 / (1.0 + np.exp(-float(score - floor)))
+    return max(0.0, min(1.0, (float(score) - floor) / (ceiling - floor)))
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -912,11 +924,10 @@ def run_retrieval(
     if not candidates:
         return []
 
-    expensive_k = (
-        min(len(candidates), RERANK_CANDIDATE_K)
-        if RERANK_CANDIDATE_K > 0
-        else min(len(candidates), max(rerank_k, RETRIEVAL_CANDIDATE_K, rerank_k * 4))
-    )
+    rerank_window = max(1, int(np.ceil(len(candidates) * max(0.0, min(1.0, float(RERANK_TOP_FRACTION))))))
+    if RERANK_CANDIDATE_K > 0:
+        rerank_window = min(rerank_window, RERANK_CANDIDATE_K)
+    expensive_k = min(len(candidates), rerank_window)
     candidates = candidates[: max(1, min(len(candidates), expensive_k))]
 
     rerank_started = time.perf_counter()
@@ -939,6 +950,7 @@ def run_retrieval(
             "id": candidate["id"],
             "name": candidate["id"].replace("-", " ").title(),
             "score": float(score),
+            "calibrated_score": calibrate_rerank_score(score),
             "retrieval_score": candidate["retrieval_score"],
             "faiss_score": candidate["faiss_score"],
             "bm25_score": candidate["bm25_score"],

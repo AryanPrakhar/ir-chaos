@@ -72,6 +72,7 @@ def _format_debug_rows(rows: list[dict]) -> list[dict]:
                 "name": row.get("name", row.get("id")),
                 "retrieval_score": round(float(row.get("retrieval_score", 0.0)), 4),
                 "rerank_score": round(float(row.get("score", 0.0)), 4),
+                "rerank_score_calibrated": round(float(row.get("calibrated_score", 0.0)), 4),
                 "final_score": round(float(row.get("final_score", 0.0)), 4),
                 "score_percent": round(float(row.get("final_score", 0.0)) * 100.0, 1),
                 "timing_ms": row.get("timing_ms"),
