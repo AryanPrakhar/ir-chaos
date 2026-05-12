@@ -17,6 +17,11 @@ _TAG_PATTERN = re.compile(
     r"<krkn-hub-scenario\s+id=[\"']([^\"']+)[\"']>(.*?)</krkn-hub-scenario>",
     re.IGNORECASE | re.DOTALL,
 )
+_SCENARIO_ID_PATTERN = re.compile(
+    r"<krkn-hub-scenario\s+id=[\"']([^\"']+)[\"']",
+    re.IGNORECASE,
+)
+_HOW_TO_RUN_PATTERN = re.compile(r"^##\s+How\s+to\s+Run\b.*$", re.IGNORECASE | re.MULTILINE)
 
 
 def load_local_scenario_docs(docs_dir: str) -> list[tuple[str, str]]:
@@ -48,6 +53,27 @@ def _extract_tagged_scenario(content: str) -> tuple[str | None, str | None]:
     return scenario_id, scenario_content
 
 
+def _extract_scenario_id(content: str) -> str | None:
+    match = _SCENARIO_ID_PATTERN.search(content or "")
+    if not match:
+        return None
+    scenario_id = match.group(1).strip()
+    return scenario_id or None
+
+
+def _strip_how_to_run(content: str) -> str:
+    match = _HOW_TO_RUN_PATTERN.search(content or "")
+    if not match:
+        return (content or "").strip()
+    return (content or "")[: match.start()].strip()
+
+
+def _strip_scenario_tag_markers(content: str) -> str:
+    if not content:
+        return ""
+    return re.sub(r"</?krkn-hub-scenario[^>]*>", "", content, flags=re.IGNORECASE).strip()
+
+
 def _clone_repository(repo_url: str, dest: str, branch: str | None = None) -> None:
     clone_cmd = ["git", "clone", "--depth", "1", "--quiet"]
     if branch:
@@ -76,16 +102,54 @@ def _merge_docs(doc_map: Dict[str, List[str]]) -> list[tuple[str, str]]:
     return merged
 
 
-def _collect_tagged_docs(docs_root: str) -> dict[str, str]:
+def _collect_scenario_folder_docs(scenarios_root: str) -> dict[str, str]:
+    scenario_docs: dict[str, str] = {}
+    root_path = Path(scenarios_root)
+    if not root_path.exists():
+        return scenario_docs
+
+    for root, _, files in os.walk(root_path):
+        if "_index.md" not in files or "_tab-krknctl.md" not in files:
+            continue
+        index_path = Path(root) / "_index.md"
+        tab_path = Path(root) / "_tab-krknctl.md"
+        try:
+            index_content = index_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Failed to read %s: %s", index_path, exc)
+            continue
+
+        scenario_id = _extract_scenario_id(index_content)
+        if not scenario_id:
+            scenario_id = Path(root).name
+            logger.warning(
+                "Missing krkn-hub-scenario id in %s; using folder name %s",
+                index_path,
+                scenario_id,
+            )
+
+        index_content = _strip_scenario_tag_markers(_strip_how_to_run(index_content))
+        try:
+            tab_content = tab_path.read_text(encoding="utf-8").strip()
+        except Exception as exc:
+            logger.warning("Failed to read %s: %s", tab_path, exc)
+            tab_content = ""
+
+        parts = [part.strip() for part in [index_content, tab_content] if part and part.strip()]
+        if not parts:
+            continue
+        scenario_docs[scenario_id] = "\n\n".join(parts)
+
+    return scenario_docs
+
+
+def _collect_tagged_docs_legacy(docs_root: str) -> dict[str, str]:
     tagged_docs: dict[str, str] = {}
     for root, _, files in os.walk(docs_root):
         for file_name in files:
             if not file_name.endswith(".md"):
                 continue
             file_path = os.path.join(root, file_name)
-            rel_path = os.path.relpath(file_path, docs_root)
-            if not rel_path.startswith("scenarios/"):
-                continue
             try:
                 content = Path(file_path).read_text(encoding="utf-8")
             except Exception as exc:
@@ -96,6 +160,18 @@ def _collect_tagged_docs(docs_root: str) -> dict[str, str]:
                 continue
             tagged_docs[scenario_id] = scenario_content
     return tagged_docs
+
+
+def _collect_tagged_docs(docs_root: str) -> dict[str, str]:
+    docs_root_path = Path(docs_root)
+    scenarios_root = docs_root_path / "scenarios"
+    if scenarios_root.exists():
+        scenario_docs = _collect_scenario_folder_docs(str(scenarios_root))
+    else:
+        scenario_docs = _collect_scenario_folder_docs(str(docs_root_path))
+    if scenario_docs:
+        return scenario_docs
+    return _collect_tagged_docs_legacy(docs_root)
 
 
 def _format_krkn_hub_inputs(scenario_name: str, scenario_inputs: list[dict]) -> str:
@@ -192,6 +268,10 @@ def build_scenario_documents(
             docs_root = str(preferred_root)
             logger.info("Loading docs from local repo root: %s", docs_root)
             tagged_docs = _collect_tagged_docs(docs_root)
+        elif (local_root / "scenarios").exists():
+            docs_root = str(local_root)
+            logger.info("Loading docs from local scenarios root: %s", docs_root)
+            tagged_docs = _collect_tagged_docs(docs_root)
         elif local_root.exists():
             docs_root = str(local_root)
             logger.info("Loading docs from local docs root: %s", docs_root)
@@ -207,7 +287,7 @@ def build_scenario_documents(
                     tagged_docs = _collect_tagged_docs(docs_root)
                 else:
                     logger.warning("Docs path not found: %s", docs_root)
-        except subprocess.CalledProcessError as exc:
+        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
             logger.warning("Failed to clone docs repo: %s", exc)
 
     if tagged_docs:
@@ -221,7 +301,7 @@ def build_scenario_documents(
     if krkn_hub_repo:
         try:
             scenario_inputs = _collect_krkn_hub_inputs(krkn_hub_repo, krkn_hub_branch)
-        except subprocess.CalledProcessError as exc:
+        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
             logger.warning("Failed to clone krkn-hub repo: %s", exc)
             scenario_inputs = {}
         for scenario_id, content in scenario_inputs.items():

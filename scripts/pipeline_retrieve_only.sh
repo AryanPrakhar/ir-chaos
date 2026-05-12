@@ -198,6 +198,17 @@ if [[ "$ENGINE" == "podman" ]]; then
   MOUNT_LABEL_SUFFIX=":Z"
 fi
 
+LOCAL_DOCS_ENV_PATH="$LOCAL_DOCS_PATH"
+LOCAL_DOCS_MOUNT_ARGS=()
+if [[ -n "$LOCAL_DOCS_PATH" ]]; then
+  if [[ -d "$LOCAL_DOCS_PATH" ]]; then
+    LOCAL_DOCS_ENV_PATH="/app/local_docs"
+    LOCAL_DOCS_MOUNT_ARGS=(-v "$LOCAL_DOCS_PATH:$LOCAL_DOCS_ENV_PATH$MOUNT_LABEL_SUFFIX")
+  else
+    echo "Warning: LOCAL_DOCS_PATH not found: $LOCAL_DOCS_PATH" >&2
+  fi
+fi
+
 now_ms() {
   # macOS-compatible millisecond timestamp (date +%s%3N not available on macOS)
   if [[ "$HOST_OS" == "darwin" ]]; then
@@ -468,6 +479,9 @@ run_retriever_python() {
   if [[ -n "${LLAMA_MOUNT_ARGS+x}" ]] && [[ ${#LLAMA_MOUNT_ARGS[@]} -gt 0 ]]; then
     run_args+=("${LLAMA_MOUNT_ARGS[@]}")
   fi
+  if [[ -n "${LOCAL_DOCS_MOUNT_ARGS+x}" ]] && [[ ${#LOCAL_DOCS_MOUNT_ARGS[@]} -gt 0 ]]; then
+    run_args+=("${LOCAL_DOCS_MOUNT_ARGS[@]}")
+  fi
   run_engine "${run_args[@]}" "$@"
 }
 
@@ -475,6 +489,9 @@ start_api_standby() {
   local run_args=()
   if [[ -n "${LLAMA_MOUNT_ARGS+x}" ]] && [[ ${#LLAMA_MOUNT_ARGS[@]} -gt 0 ]]; then
     run_args+=("${LLAMA_MOUNT_ARGS[@]}")
+  fi
+  if [[ -n "${LOCAL_DOCS_MOUNT_ARGS+x}" ]] && [[ ${#LOCAL_DOCS_MOUNT_ARGS[@]} -gt 0 ]]; then
+    run_args+=("${LOCAL_DOCS_MOUNT_ARGS[@]}")
   fi
 
   local container_id
@@ -496,7 +513,7 @@ start_api_standby() {
         -e REPO_PATH="$REPO_PATH" \
         -e KRKN_HUB_REPO="$KRKN_HUB_REPO" \
         -e KRKN_HUB_BRANCH="$KRKN_HUB_BRANCH" \
-        -e LOCAL_DOCS_PATH="$LOCAL_DOCS_PATH" \
+        -e LOCAL_DOCS_PATH="$LOCAL_DOCS_ENV_PATH" \
         -e RETRIEVER_BACKEND="$BACKEND" \
         -e CROSS_ENCODER_MODEL="$CROSS_ENCODER_MODEL" \
         -e RERANK_MAX_LENGTH="$RERANK_MAX_LENGTH" \
@@ -533,7 +550,7 @@ start_api_standby() {
         -e REPO_PATH="$REPO_PATH" \
         -e KRKN_HUB_REPO="$KRKN_HUB_REPO" \
         -e KRKN_HUB_BRANCH="$KRKN_HUB_BRANCH" \
-        -e LOCAL_DOCS_PATH="$LOCAL_DOCS_PATH" \
+        -e LOCAL_DOCS_PATH="$LOCAL_DOCS_ENV_PATH" \
         -e RETRIEVER_BACKEND="$BACKEND" \
         -e CROSS_ENCODER_MODEL="$CROSS_ENCODER_MODEL" \
         -e RERANK_MAX_LENGTH="$RERANK_MAX_LENGTH" \
@@ -851,7 +868,7 @@ if [[ "$should_reindex" == "1" ]]; then
     -e REPO_PATH="$REPO_PATH" \
     -e KRKN_HUB_REPO="$KRKN_HUB_REPO" \
     -e KRKN_HUB_BRANCH="$KRKN_HUB_BRANCH" \
-    -e LOCAL_DOCS_PATH="$LOCAL_DOCS_PATH" \
+    -e LOCAL_DOCS_PATH="$LOCAL_DOCS_ENV_PATH" \
     -e RETRIEVER_BACKEND="$BACKEND" \
     -e CROSS_ENCODER_MODEL="$CROSS_ENCODER_MODEL" \
     -e RERANK_MAX_LENGTH="$RERANK_MAX_LENGTH" \
