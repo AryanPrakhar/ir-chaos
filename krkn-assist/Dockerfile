@@ -78,7 +78,6 @@ RUN if [ "$TORCH_BUILD" = "cuda" ]; then \
       requests
 
 COPY krkn-assist/ /app/
-COPY docs/ /app/docs/
 
 EXPOSE 8080 18080
 CMD ["python3", "api_server.py"]
