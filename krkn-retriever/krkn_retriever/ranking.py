@@ -1,3 +1,4 @@
+import json
 import os
 import pickle
 import re
@@ -13,12 +14,18 @@ from .settings import (
     DEFAULT_LLAMA_GPU_LAYERS,
     DEFAULT_LLAMA_MODEL,
     DOCS_DIR,
+    DOCS_CACHE_PATH,
     FINAL_CE_WEIGHT,
     FINAL_FAISS_WEIGHT,
+    GITHUB_BRANCH,
+    GITHUB_REPO,
     INDEX_DIR,
     INDEX_PATH,
+    KRKN_HUB_BRANCH,
+    KRKN_HUB_REPO,
+    LOCAL_DOCS_PATH,
     META_PATH,
-    NON_SCENARIO_DOCS,
+    REPO_PATH,
     RERANK_BATCH_SIZE,
     RERANK_CANDIDATE_K,
     RERANK_DOC_CHARS,
@@ -27,6 +34,7 @@ from .settings import (
     RERANK_THREADS,
     RETRIEVER_MODEL,
 )
+from .ingestion import build_scenario_documents, load_local_scenario_docs
 
 
 def score_to_match(ce_score: float, faiss_score: float) -> float:
@@ -295,12 +303,7 @@ class BaseRanker:
         raise NotImplementedError
 
     def _scenario_docs(self, docs_dir: str) -> list[tuple[str, str]]:
-        docs: list[tuple[str, str]] = []
-        for md_file in sorted(Path(docs_dir).glob("*.md")):
-            if md_file.name in NON_SCENARIO_DOCS:
-                continue
-            docs.append((md_file.stem, md_file.read_text(encoding="utf-8").strip()))
-        return docs
+        return load_local_scenario_docs(docs_dir)
 
     def _load_index(self) -> None:
         if Path(INDEX_PATH).exists() and Path(META_PATH).exists():
@@ -311,11 +314,36 @@ class BaseRanker:
     def _load_doc_texts(self, docs_dir: str = DOCS_DIR) -> None:
         if self.doc_texts:
             return
+        docs_cache = Path(DOCS_CACHE_PATH)
+        if docs_cache.exists():
+            try:
+                payload = json.loads(docs_cache.read_text(encoding="utf-8"))
+                docs = payload.get("docs", []) if isinstance(payload, dict) else []
+                self.doc_texts = {
+                    str(row.get("id")): str(row.get("text"))
+                    for row in docs
+                    if row.get("id") and row.get("text")
+                }
+                if self.doc_texts:
+                    return
+            except Exception:
+                self.doc_texts = {}
+
         self.doc_texts = {doc_id: text for doc_id, text in self._scenario_docs(docs_dir)}
 
     def build_index(self, docs_dir: str = DOCS_DIR) -> None:
         self._init_models()
-        docs = self._scenario_docs(docs_dir)
+        docs = build_scenario_documents(
+            docs_dir=docs_dir,
+            github_repo=GITHUB_REPO,
+            repo_path=REPO_PATH,
+            github_branch=GITHUB_BRANCH,
+            krkn_hub_repo=KRKN_HUB_REPO,
+            krkn_hub_branch=KRKN_HUB_BRANCH,
+            local_docs_path=LOCAL_DOCS_PATH,
+        )
+        if not docs:
+            raise RuntimeError("No documents available for indexing")
         texts = [text for _, text in docs]
         ids = [doc_id for doc_id, _ in docs]
         self.doc_texts = dict(docs)
@@ -326,6 +354,11 @@ class BaseRanker:
         faiss.write_index(index, INDEX_PATH)
         with open(META_PATH, "wb") as handle:
             pickle.dump(ids, handle)
+        docs_payload = {"docs": [{"id": doc_id, "text": text} for doc_id, text in docs]}
+        Path(DOCS_CACHE_PATH).write_text(
+            json.dumps(docs_payload, indent=2),
+            encoding="utf-8",
+        )
         self.faiss_index = index
         self.doc_ids = ids
 

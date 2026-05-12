@@ -31,9 +31,10 @@ ARG TORCH_CUDA_INDEX_URL=https://download.pytorch.org/whl/cu126
 
 # ── [2/4] Python + build tools ───────────────────────────────────────────────
 RUN dnf -y install --setopt=install_weak_deps=False \
-      python3 python3-pip python3-devel \
-      gcc gcc-c++ cmake ninja-build make pkgconf-pkg-config \
-      spirv-headers-devel && \
+    git \
+    python3 python3-pip python3-devel \
+    gcc gcc-c++ cmake ninja-build make pkgconf-pkg-config \
+    spirv-headers-devel && \
     dnf clean all
 
 # ── [3/4] llama-cpp-python with Vulkan backend ───────────────────────────────

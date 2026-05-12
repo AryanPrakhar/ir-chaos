@@ -23,6 +23,13 @@ set -euo pipefail
 #   RETRIEVER_RERANKER_GGUF_REPO=gpustack/bge-reranker-v2-m3-GGUF  (ignored: ONNX reranker used)
 #   RETRIEVER_RERANKER_GGUF_FILE=bge-reranker-v2-m3-Q2_K.gguf       (ignored: ONNX reranker used)
 #   RETRIEVER_AUTO_DOWNLOAD_MODEL=1
+#   INDEX_TTL_DAYS=7
+#   GITHUB_REPO=https://github.com/krkn-chaos/website
+#   GITHUB_BRANCH=main
+#   REPO_PATH=content/en/docs
+#   KRKN_HUB_REPO=https://github.com/krkn-chaos/krkn-hub
+#   KRKN_HUB_BRANCH=
+#   LOCAL_DOCS_PATH=/path/to/website/repo  # repo root or docs root
 #   CROSS_ENCODER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 #   RERANK_MAX_LENGTH=192
 #   RERANK_CANDIDATE_K=0       # 0 means use rerank-k as the expensive CE window
@@ -60,6 +67,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SHARED_DIR="$ROOT_DIR/shared"
 INDEX_FILE="$ROOT_DIR/krkn-retriever/faiss-index/krkn-scenarios.index"
 META_FILE="$ROOT_DIR/krkn-retriever/faiss-index/krkn-scenarios.meta"
+DOCS_CACHE_FILE="$ROOT_DIR/krkn-retriever/faiss-index/krkn-scenarios.docs.json"
 HF_CACHE_DIR="${HF_CACHE_DIR:-$ROOT_DIR/.cache/huggingface}"
 TORCH_CACHE_DIR="${TORCH_CACHE_DIR:-$ROOT_DIR/.cache/torch}"
 ENGINE="${CONTAINER_ENGINE:-podman}"
@@ -87,6 +95,13 @@ RERANK_DOC_CHARS="${RERANK_DOC_CHARS:-1800}"
 RERANK_THREADS="${RERANK_THREADS:-4}"
 RERANK_CANDIDATE_K="${RERANK_CANDIDATE_K:-0}"
 RERANK_ONNX_QUANTIZE="${RERANK_ONNX_QUANTIZE:-1}"
+INDEX_TTL_DAYS="${INDEX_TTL_DAYS:-7}"
+GITHUB_REPO="${GITHUB_REPO:-https://github.com/krkn-chaos/website}"
+GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
+REPO_PATH="${REPO_PATH:-content/en/docs}"
+KRKN_HUB_REPO="${KRKN_HUB_REPO:-https://github.com/krkn-chaos/krkn-hub}"
+KRKN_HUB_BRANCH="${KRKN_HUB_BRANCH:-}"
+LOCAL_DOCS_PATH="${LOCAL_DOCS_PATH:-}"
 
 # Support llama.cpp shorthand "repo:QUANT" (e.g. gpustack/bge-reranker-v2-m3-GGUF:Q2_K)
 if [[ "$RERANKER_GGUF_REPO" == *:* ]]; then
@@ -249,6 +264,44 @@ if not meta.exists():
 with meta.open("rb") as f:
     ids = pickle.load(f)
 print(len(ids))
+PY
+}
+
+index_is_stale() {
+  python3 - "$INDEX_FILE" "$META_FILE" "$DOCS_CACHE_FILE" "$INDEX_TTL_DAYS" <<'PY'
+import os
+import sys
+import time
+
+index_path, meta_path, docs_path, ttl_days = sys.argv[1:5]
+try:
+  ttl = float(ttl_days)
+except ValueError:
+  ttl = 0.0
+
+if ttl <= 0:
+  print("0")
+  raise SystemExit(0)
+
+if not (os.path.exists(index_path) and os.path.exists(meta_path)):
+  print("1")
+  raise SystemExit(0)
+
+if not os.path.exists(docs_path):
+  print("1")
+  raise SystemExit(0)
+
+mtimes = []
+for path in (index_path, meta_path, docs_path):
+  if os.path.exists(path):
+    mtimes.append(os.path.getmtime(path))
+
+if not mtimes:
+  print("1")
+  raise SystemExit(0)
+
+age = time.time() - max(mtimes)
+print("1" if age >= (ttl * 86400.0) else "0")
 PY
 }
 
@@ -437,6 +490,13 @@ start_api_standby() {
         -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
         -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
         -e DOCS_DIR=/app/docs \
+        -e INDEX_TTL_DAYS="$INDEX_TTL_DAYS" \
+        -e GITHUB_REPO="$GITHUB_REPO" \
+        -e GITHUB_BRANCH="$GITHUB_BRANCH" \
+        -e REPO_PATH="$REPO_PATH" \
+        -e KRKN_HUB_REPO="$KRKN_HUB_REPO" \
+        -e KRKN_HUB_BRANCH="$KRKN_HUB_BRANCH" \
+        -e LOCAL_DOCS_PATH="$LOCAL_DOCS_PATH" \
         -e RETRIEVER_BACKEND="$BACKEND" \
         -e CROSS_ENCODER_MODEL="$CROSS_ENCODER_MODEL" \
         -e RERANK_MAX_LENGTH="$RERANK_MAX_LENGTH" \
@@ -467,6 +527,13 @@ start_api_standby() {
         -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
         -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
         -e DOCS_DIR=/app/docs \
+        -e INDEX_TTL_DAYS="$INDEX_TTL_DAYS" \
+        -e GITHUB_REPO="$GITHUB_REPO" \
+        -e GITHUB_BRANCH="$GITHUB_BRANCH" \
+        -e REPO_PATH="$REPO_PATH" \
+        -e KRKN_HUB_REPO="$KRKN_HUB_REPO" \
+        -e KRKN_HUB_BRANCH="$KRKN_HUB_BRANCH" \
+        -e LOCAL_DOCS_PATH="$LOCAL_DOCS_PATH" \
         -e RETRIEVER_BACKEND="$BACKEND" \
         -e CROSS_ENCODER_MODEL="$CROSS_ENCODER_MODEL" \
         -e RERANK_MAX_LENGTH="$RERANK_MAX_LENGTH" \
@@ -758,16 +825,33 @@ fi
 vlog ""
 vlog "[2/3] Ensuring FAISS index exists"
 STEP_START_MS="$(now_ms)"
+should_reindex=0
 if [[ -f "$INDEX_FILE" && -f "$META_FILE" ]]; then
-  vlog "      FAISS index already present, skipping indexing"
+  if [[ "$(index_is_stale)" == "1" ]]; then
+    vlog "      FAISS index older than TTL (${INDEX_TTL_DAYS}d), rebuilding"
+    should_reindex=1
+  else
+    vlog "      FAISS index already present, skipping indexing"
+  fi
 else
   vlog "      FAISS index missing, building now..."
+  should_reindex=1
+fi
+
+if [[ "$should_reindex" == "1" ]]; then
   run_cmd run_retriever_python \
     -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
     -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
     -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
     -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
     -e DOCS_DIR=/app/docs \
+    -e INDEX_TTL_DAYS="$INDEX_TTL_DAYS" \
+    -e GITHUB_REPO="$GITHUB_REPO" \
+    -e GITHUB_BRANCH="$GITHUB_BRANCH" \
+    -e REPO_PATH="$REPO_PATH" \
+    -e KRKN_HUB_REPO="$KRKN_HUB_REPO" \
+    -e KRKN_HUB_BRANCH="$KRKN_HUB_BRANCH" \
+    -e LOCAL_DOCS_PATH="$LOCAL_DOCS_PATH" \
     -e RETRIEVER_BACKEND="$BACKEND" \
     -e CROSS_ENCODER_MODEL="$CROSS_ENCODER_MODEL" \
     -e RERANK_MAX_LENGTH="$RERANK_MAX_LENGTH" \

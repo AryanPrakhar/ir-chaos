@@ -32,9 +32,21 @@ DEFAULT_LLAMA_MODEL = os.environ.get("LLAMA_EMBED_MODEL", "")
 DEFAULT_LLAMA_GPU_LAYERS = int(os.environ.get("LLAMA_GPU_LAYERS", "-1"))
 
 DOCS_DIR = os.environ.get("DOCS_DIR", "../docs")
-INDEX_DIR = "faiss-index"
+INDEX_DIR = os.environ.get("INDEX_DIR", "faiss-index")
 INDEX_PATH = f"{INDEX_DIR}/krkn-scenarios.index"
 META_PATH = f"{INDEX_DIR}/krkn-scenarios.meta"
+DOCS_CACHE_PATH = f"{INDEX_DIR}/krkn-scenarios.docs.json"
+
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "https://github.com/krkn-chaos/website")
+GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
+REPO_PATH = os.environ.get("REPO_PATH", "content/en/docs")
+KRKN_HUB_REPO = os.environ.get("KRKN_HUB_REPO", "https://github.com/krkn-chaos/krkn-hub")
+KRKN_HUB_BRANCH = os.environ.get("KRKN_HUB_BRANCH")
+LOCAL_DOCS_PATH = os.environ.get("LOCAL_DOCS_PATH")
+try:
+    INDEX_TTL_DAYS = float(os.environ.get("INDEX_TTL_DAYS", "7"))
+except ValueError:
+    INDEX_TTL_DAYS = 7.0
 
 NON_SCENARIO_DOCS = {
     "all_scenarios_env.md",

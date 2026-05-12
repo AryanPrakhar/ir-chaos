@@ -17,8 +17,10 @@ from .settings import (
     DEFAULT_DEVICE,
     DEFAULT_LLAMA_GPU_LAYERS,
     DEFAULT_LLAMA_MODEL,
+    DOCS_CACHE_PATH,
     DOCS_DIR,
     INDEX_PATH,
+    INDEX_TTL_DAYS,
     META_PATH,
     MIN_MATCH_SCORE,
 )
@@ -39,11 +41,36 @@ QUERY_CACHE_SIZE = int(os.environ.get("RETRIEVER_QUERY_CACHE_SIZE", "256"))
 RELEVANCE_THRESHOLD = float(os.environ.get("RELEVANCE_THRESHOLD", str(MIN_MATCH_SCORE)))
 SERVICE_NAME = os.environ.get("RETRIEVER_SERVICE_NAME", "krknctl-assist")
 SERVICE_MODEL = os.environ.get("RETRIEVER_SERVICE_MODEL", "krkn-retriever")
+INDEX_TTL_SECONDS = max(0.0, float(INDEX_TTL_DAYS)) * 86400.0
 
 ranker = None
 query_cache: OrderedDict[tuple[str, int, int], list[dict]] = OrderedDict()
 _service_ready = False
 _init_lock = asyncio.Lock()
+
+
+def _index_last_modified() -> float:
+    timestamps = []
+    for path in (INDEX_PATH, META_PATH, DOCS_CACHE_PATH):
+        if os.path.exists(path):
+            try:
+                timestamps.append(os.path.getmtime(path))
+            except OSError:
+                continue
+    return max(timestamps) if timestamps else 0.0
+
+
+def _index_is_stale() -> bool:
+    if INDEX_TTL_SECONDS <= 0:
+        return False
+    if not (os.path.exists(INDEX_PATH) and os.path.exists(META_PATH)):
+        return True
+    if not os.path.exists(DOCS_CACHE_PATH):
+        return True
+    last_modified = _index_last_modified()
+    if last_modified <= 0:
+        return True
+    return (time.time() - last_modified) >= INDEX_TTL_SECONDS
 
 
 def cache_get(cache_key: tuple[str, int, int]) -> list[dict] | None:
@@ -115,8 +142,18 @@ async def lifespan(_: FastAPI):
                 llama_gpu_layers=LLAMA_GPU_LAYERS,
             )
 
-            if FORCE_REINDEX or not (os.path.exists(INDEX_PATH) and os.path.exists(META_PATH)):
-                logger.info("Building FAISS index")
+            reindex_reason = None
+            if FORCE_REINDEX:
+                reindex_reason = "force"
+            elif not (os.path.exists(INDEX_PATH) and os.path.exists(META_PATH)):
+                reindex_reason = "missing"
+            elif not os.path.exists(DOCS_CACHE_PATH):
+                reindex_reason = "cache_missing"
+            elif _index_is_stale():
+                reindex_reason = "stale"
+
+            if reindex_reason:
+                logger.info("Building FAISS index (reason=%s)", reindex_reason)
                 ranker.build_index(DOCS_DIR)
 
             ranker._init_models()
