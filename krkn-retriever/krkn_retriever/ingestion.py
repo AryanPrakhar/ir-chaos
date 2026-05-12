@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List
 
-from .settings import NON_SCENARIO_DOCS
+from .settings import MERGED_DOCS_DEBUG_DIR, NON_SCENARIO_DOCS
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +100,50 @@ def _merge_docs(doc_map: Dict[str, List[str]]) -> list[tuple[str, str]]:
             continue
         merged.append((scenario_id, "\n\n".join(parts)))
     return merged
+
+
+def persist_merged_scenario_docs(
+    docs: list[tuple[str, str]],
+    output_dir: str = MERGED_DOCS_DEBUG_DIR,
+) -> None:
+    target_dir = Path(output_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    for stale_path in target_dir.glob("*.md"):
+        try:
+            stale_path.unlink()
+        except OSError as exc:
+            logger.warning("Failed to remove stale merged doc %s: %s", stale_path, exc)
+
+    manifest_path = target_dir / "manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest_path.unlink()
+        except OSError as exc:
+            logger.warning("Failed to remove stale manifest %s: %s", manifest_path, exc)
+
+    manifest: list[dict[str, str | int]] = []
+    for scenario_id, content in docs:
+        scenario_path = target_dir / f"{scenario_id}.md"
+        try:
+            scenario_path.write_text(content.rstrip() + "\n", encoding="utf-8")
+            manifest.append(
+                {
+                    "id": scenario_id,
+                    "path": str(scenario_path),
+                    "chars": len(content),
+                }
+            )
+        except OSError as exc:
+            logger.warning("Failed to persist merged doc %s: %s", scenario_path, exc)
+
+    try:
+        manifest_path.write_text(
+            json.dumps({"docs": manifest}, indent=2),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.warning("Failed to write merged docs manifest %s: %s", manifest_path, exc)
 
 
 def _collect_scenario_folder_docs(scenarios_root: str) -> dict[str, str]:
@@ -307,4 +351,6 @@ def build_scenario_documents(
         for scenario_id, content in scenario_inputs.items():
             _append_doc(scenario_parts, scenario_id, content)
 
-    return _merge_docs(scenario_parts)
+    merged_docs = _merge_docs(scenario_parts)
+    persist_merged_scenario_docs(merged_docs)
+    return merged_docs
