@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import pickle
 import re
@@ -38,6 +39,8 @@ from .settings import (
     RETRIEVER_MODEL,
 )
 from .ingestion import build_scenario_documents, load_local_scenario_docs
+
+logger = logging.getLogger(__name__)
 
 
 def score_to_match(ce_score: float, faiss_score: float, bm25_score: float) -> float:
@@ -413,11 +416,22 @@ class BaseRanker:
             raise RuntimeError("No documents available for indexing")
         texts = [text for _, text in docs]
         ids = [doc_id for doc_id, _ in docs]
+        scenario_ids = sorted(set(ids))
+        logger.info("Scenario IDs (%d):\n%s", len(scenario_ids), "\n".join(scenario_ids))
         self.doc_texts = dict(docs)
         embeddings = self._embed_documents(texts)
         index = faiss.IndexFlatIP(embeddings.shape[1])
         index.add(embeddings)
         Path(INDEX_DIR).mkdir(exist_ok=True, parents=True)
+        try:
+            scenario_list_path = Path(INDEX_DIR) / "krkn-scenarios.list.txt"
+            scenario_list_path.write_text(
+                "\n".join(scenario_ids) + "\n",
+                encoding="utf-8",
+            )
+            logger.info("Scenario list written to %s", scenario_list_path)
+        except OSError as exc:
+            logger.warning("Failed to write scenario list: %s", exc)
         faiss.write_index(index, INDEX_PATH)
         with open(META_PATH, "wb") as handle:
             pickle.dump(ids, handle)
