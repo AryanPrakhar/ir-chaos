@@ -10,8 +10,9 @@ RETRIEVER_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 MIN_FAISS_SCORE = 0.23
 FAISS_TOP2_GAP_THRESHOLD = 0.07
 CE_TOP2_GAP_THRESHOLD = 1.0
-FINAL_CE_WEIGHT = 0.8
+FINAL_CE_WEIGHT = 0.6
 FINAL_FAISS_WEIGHT = 0.2
+FINAL_BM25_WEIGHT = 0.2
 MIN_QUERY_WORDS = 4
 MIN_CE_SCORE = -9.0
 MIN_MATCH_SCORE = float(os.environ.get("MIN_MATCH_SCORE", "0.10"))
@@ -24,6 +25,9 @@ RERANK_THREADS = int(
 )
 RERANK_CANDIDATE_K = int(os.environ.get("RERANK_CANDIDATE_K", "0"))
 RERANK_ONNX_QUANTIZE = os.environ.get("RERANK_ONNX_QUANTIZE", "1") == "1"
+
+BM25_K1 = float(os.environ.get("BM25_K1", "1.5"))
+BM25_B = float(os.environ.get("BM25_B", "0.75"))
 
 DEFAULT_BACKEND = os.environ.get("RETRIEVER_BACKEND", "auto")
 DEFAULT_DEVICE = os.environ.get("RETRIEVER_DEVICE", "auto")

@@ -9,12 +9,15 @@ import faiss
 import numpy as np
 
 from .settings import (
+    BM25_B,
+    BM25_K1,
     CROSS_ENCODER_MODEL,
     DEFAULT_BACKEND,
     DEFAULT_LLAMA_GPU_LAYERS,
     DEFAULT_LLAMA_MODEL,
     DOCS_DIR,
     DOCS_CACHE_PATH,
+    FINAL_BM25_WEIGHT,
     FINAL_CE_WEIGHT,
     FINAL_FAISS_WEIGHT,
     GITHUB_BRANCH,
@@ -37,10 +40,74 @@ from .settings import (
 from .ingestion import build_scenario_documents, load_local_scenario_docs
 
 
-def score_to_match(ce_score: float, faiss_score: float) -> float:
+def score_to_match(ce_score: float, faiss_score: float, bm25_score: float) -> float:
     ce_sigmoid = 1.0 / (1.0 + np.exp(-float(ce_score)))
     faiss_score = max(0.0, min(1.0, float(faiss_score)))
-    return (FINAL_CE_WEIGHT * ce_sigmoid) + (FINAL_FAISS_WEIGHT * faiss_score)
+    bm25_score = max(0.0, min(1.0, float(bm25_score)))
+    weight_total = FINAL_CE_WEIGHT + FINAL_FAISS_WEIGHT + FINAL_BM25_WEIGHT
+    if weight_total <= 0:
+        return 0.0
+    return (
+        (FINAL_CE_WEIGHT * ce_sigmoid)
+        + (FINAL_FAISS_WEIGHT * faiss_score)
+        + (FINAL_BM25_WEIGHT * bm25_score)
+    ) / weight_total
+
+
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+
+def _bm25_scores(query: str, doc_ids: list[str], doc_texts: dict[str, str]) -> dict[str, float]:
+    terms = _tokenize(query)
+    if not terms or not doc_ids:
+        return {doc_id: 0.0 for doc_id in doc_ids}
+
+    query_terms = set(terms)
+    doc_term_freqs: list[dict[str, int]] = []
+    doc_lengths: list[int] = []
+    doc_freqs = {term: 0 for term in query_terms}
+
+    for doc_id in doc_ids:
+        tokens = _tokenize(doc_texts.get(doc_id, ""))
+        length = len(tokens)
+        doc_lengths.append(length)
+        term_counts: dict[str, int] = {}
+        if tokens:
+            for token in tokens:
+                if token in query_terms:
+                    term_counts[token] = term_counts.get(token, 0) + 1
+        for term in query_terms:
+            if term_counts.get(term, 0) > 0:
+                doc_freqs[term] += 1
+        doc_term_freqs.append(term_counts)
+
+    total_docs = len(doc_ids)
+    avgdl = sum(doc_lengths) / total_docs if total_docs else 0.0
+    scores: dict[str, float] = {doc_id: 0.0 for doc_id in doc_ids}
+
+    for idx, doc_id in enumerate(doc_ids):
+        dl = float(doc_lengths[idx])
+        tf_map = doc_term_freqs[idx]
+        if not tf_map:
+            continue
+        score = 0.0
+        for term in query_terms:
+            tf = float(tf_map.get(term, 0))
+            if tf <= 0:
+                continue
+            df = float(doc_freqs.get(term, 0))
+            idf = np.log((total_docs - df + 0.5) / (df + 0.5) + 1.0)
+            denom = tf + BM25_K1 * (1.0 - BM25_B + BM25_B * (dl / avgdl if avgdl else 0.0))
+            score += idf * ((tf * (BM25_K1 + 1.0)) / (denom if denom else 1.0))
+        scores[doc_id] = score
+    return scores
+
+
+def _normalize_score(score: float, min_value: float, max_value: float) -> float:
+    if max_value <= min_value:
+        return 0.0
+    return max(0.0, min(1.0, (score - min_value) / (max_value - min_value)))
 
 
 def cuda_runtime_works() -> bool:
@@ -487,17 +554,55 @@ def run_retrieval(
     started = time.perf_counter()
     retrieval_started = time.perf_counter()
     query_embedding = embed_query(query).reshape(1, -1)
-    scores, indices = faiss_index.search(query_embedding, min(retrieve_k, len(doc_ids)))
+    faiss_top_k = min(retrieve_k, len(doc_ids))
+    scores, indices = faiss_index.search(query_embedding, faiss_top_k)
+    faiss_scores: dict[str, float] = {}
+    if faiss_top_k > 0:
+        for offset, idx in enumerate(indices[0]):
+            if idx < 0 or idx >= len(doc_ids):
+                continue
+            faiss_scores[doc_ids[idx]] = float(scores[0][offset])
+
+    bm25_scores = _bm25_scores(query, doc_ids, doc_texts)
+    bm25_top_ids = [
+        doc_id
+        for doc_id, _ in sorted(bm25_scores.items(), key=lambda item: item[1], reverse=True)[:faiss_top_k]
+    ]
+
+    candidate_ids = list(dict.fromkeys(list(faiss_scores.keys()) + bm25_top_ids))
     retrieve_ms = (time.perf_counter() - retrieval_started) * 1000
 
-    candidates = [
-        {
-            "id": doc_ids[idx],
-            "text": doc_texts.get(doc_ids[idx], ""),
-            "retrieval_score": float(scores[0][offset]),
-        }
-        for offset, idx in enumerate(indices[0])
-    ]
+    faiss_values = list(faiss_scores.values()) or [0.0]
+    min_faiss = min(faiss_values)
+    max_faiss = max(faiss_values)
+    bm25_values = [bm25_scores.get(doc_id, 0.0) for doc_id in candidate_ids]
+    min_bm25 = min(bm25_values) if bm25_values else 0.0
+    max_bm25 = max(bm25_values) if bm25_values else 0.0
+    retriever_weight_total = FINAL_FAISS_WEIGHT + FINAL_BM25_WEIGHT
+
+    candidates = []
+    for doc_id in candidate_ids:
+        faiss_raw = faiss_scores.get(doc_id, 0.0)
+        bm25_raw = bm25_scores.get(doc_id, 0.0)
+        faiss_norm = _normalize_score(faiss_raw, min_faiss, max_faiss)
+        bm25_norm = _normalize_score(bm25_raw, min_bm25, max_bm25)
+        if retriever_weight_total > 0:
+            retrieval_score = (
+                (FINAL_FAISS_WEIGHT * faiss_norm) + (FINAL_BM25_WEIGHT * bm25_norm)
+            ) / retriever_weight_total
+        else:
+            retrieval_score = faiss_norm
+        candidates.append(
+            {
+                "id": doc_id,
+                "text": doc_texts.get(doc_id, ""),
+                "retrieval_score": retrieval_score,
+                "faiss_score": faiss_norm,
+                "bm25_score": bm25_norm,
+            }
+        )
+
+    candidates.sort(key=lambda row: row["retrieval_score"], reverse=True)
     if not candidates:
         return []
 
@@ -515,11 +620,17 @@ def run_retrieval(
             "name": candidate["id"].replace("-", " ").title(),
             "score": float(score),
             "retrieval_score": candidate["retrieval_score"],
+            "faiss_score": candidate["faiss_score"],
+            "bm25_score": candidate["bm25_score"],
         }
         for candidate, score in zip(candidates, rerank_scores)
     ]
     for row in results:
-        row["final_score"] = score_to_match(row["score"], row["retrieval_score"])
+        row["final_score"] = score_to_match(
+            row["score"],
+            row.get("faiss_score", 0.0),
+            row.get("bm25_score", 0.0),
+        )
     results.sort(key=lambda row: row["final_score"], reverse=True)
 
     total_ms = (time.perf_counter() - started) * 1000
