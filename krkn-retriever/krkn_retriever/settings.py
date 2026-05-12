@@ -25,6 +25,11 @@ RERANK_THREADS = int(
 )
 RERANK_CANDIDATE_K = int(os.environ.get("RERANK_CANDIDATE_K", "0"))
 RERANK_ONNX_QUANTIZE = os.environ.get("RERANK_ONNX_QUANTIZE", "1") == "1"
+RETRIEVAL_CANDIDATE_K = int(os.environ.get("RETRIEVAL_CANDIDATE_K", "24"))
+VECTOR_SEARCH_MULTIPLIER = int(os.environ.get("VECTOR_SEARCH_MULTIPLIER", "6"))
+INDEX_CHUNK_SIZE_CHARS = int(os.environ.get("INDEX_CHUNK_SIZE_CHARS", "1200"))
+INDEX_CHUNK_OVERLAP_CHARS = int(os.environ.get("INDEX_CHUNK_OVERLAP_CHARS", "200"))
+RERANK_SUPPORT_PASSAGES = int(os.environ.get("RERANK_SUPPORT_PASSAGES", "2"))
 
 BM25_K1 = float(os.environ.get("BM25_K1", "1.5"))
 BM25_B = float(os.environ.get("BM25_B", "0.75"))
@@ -40,6 +45,10 @@ INDEX_DIR = os.environ.get("INDEX_DIR", "faiss-index")
 INDEX_PATH = f"{INDEX_DIR}/krkn-scenarios.index"
 META_PATH = f"{INDEX_DIR}/krkn-scenarios.meta"
 DOCS_CACHE_PATH = f"{INDEX_DIR}/krkn-scenarios.docs.json"
+MERGED_DOCS_DEBUG_DIR = os.environ.get(
+    "MERGED_DOCS_DEBUG_DIR",
+    f"{INDEX_DIR}/merged-scenarios",
+)
 
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "https://github.com/krkn-chaos/website")
 GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
