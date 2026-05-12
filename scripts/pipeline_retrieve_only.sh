@@ -217,6 +217,12 @@ if [[ -n "$LOCAL_DOCS_PATH" ]]; then
   fi
 fi
 
+vlog() {
+  if [[ "$VERBOSE" == "1" ]]; then
+    echo "$@"
+  fi
+}
+
 DOCS_MOUNT_ARGS=()
 if [[ -d "$ROOT_DIR/docs" ]]; then
   DOCS_MOUNT_ARGS=(-v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX")
@@ -230,12 +236,6 @@ now_ms() {
     python3 -c "import time; print(int(time.time() * 1000))"
   else
     date +%s%3N
-  fi
-}
-
-vlog() {
-  if [[ "$VERBOSE" == "1" ]]; then
-    echo "$@"
   fi
 }
 
