@@ -34,6 +34,8 @@ set -euo pipefail
 #   RERANK_MAX_LENGTH=192
 #   RERANK_CANDIDATE_K=0       # 0 means use rerank-k as the expensive CE window
 #   RETRIEVER_FORCE_BUILD=1
+#   FORCE_REINDEX=true
+#   RETRIEVER_FORCE_REINDEX=1
 #   HF_TOKEN / HUGGING_FACE_HUB_TOKEN (optional, for gated HF downloads)
 #   HF_CACHE_DIR, TORCH_CACHE_DIR
 #
@@ -74,6 +76,12 @@ ENGINE="${CONTAINER_ENGINE:-podman}"
 IMAGE="${RETRIEVER_IMAGE:-krkn-retriever:fastapi}"
 DOCKERFILE="${RETRIEVER_DOCKERFILE:-$ROOT_DIR/krkn-retriever/Dockerfile}"
 FORCE_BUILD="${RETRIEVER_FORCE_BUILD:-0}"
+FORCE_REINDEX_RAW="${FORCE_REINDEX:-${RETRIEVER_FORCE_REINDEX:-0}}"
+FORCE_REINDEX="false"
+case "$FORCE_REINDEX_RAW" in
+  1|true|TRUE|yes|YES) FORCE_REINDEX="true" ;;
+  *) FORCE_REINDEX="false" ;;
+esac
 BACKEND="${RETRIEVER_BACKEND:-auto}"
 LLAMA_EMBED_MODEL_PATH="${LLAMA_EMBED_MODEL:-}"
 LLAMA_RERANKER_MODEL_PATH="${LLAMA_RERANKER_MODEL:-}"
@@ -508,6 +516,7 @@ start_api_standby() {
         -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
         -e DOCS_DIR=/app/docs \
         -e INDEX_TTL_DAYS="$INDEX_TTL_DAYS" \
+        -e FORCE_REINDEX="$FORCE_REINDEX" \
         -e GITHUB_REPO="$GITHUB_REPO" \
         -e GITHUB_BRANCH="$GITHUB_BRANCH" \
         -e REPO_PATH="$REPO_PATH" \
@@ -545,6 +554,7 @@ start_api_standby() {
         -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
         -e DOCS_DIR=/app/docs \
         -e INDEX_TTL_DAYS="$INDEX_TTL_DAYS" \
+        -e FORCE_REINDEX="$FORCE_REINDEX" \
         -e GITHUB_REPO="$GITHUB_REPO" \
         -e GITHUB_BRANCH="$GITHUB_BRANCH" \
         -e REPO_PATH="$REPO_PATH" \
@@ -844,7 +854,10 @@ vlog "[2/3] Ensuring FAISS index exists"
 STEP_START_MS="$(now_ms)"
 should_reindex=0
 if [[ -f "$INDEX_FILE" && -f "$META_FILE" ]]; then
-  if [[ "$(index_is_stale)" == "1" ]]; then
+  if [[ "$FORCE_REINDEX" == "true" ]]; then
+    vlog "      FORCE_REINDEX enabled, rebuilding"
+    should_reindex=1
+  elif [[ "$(index_is_stale)" == "1" ]]; then
     vlog "      FAISS index older than TTL (${INDEX_TTL_DAYS}d), rebuilding"
     should_reindex=1
   else
@@ -863,6 +876,7 @@ if [[ "$should_reindex" == "1" ]]; then
     -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
     -e DOCS_DIR=/app/docs \
     -e INDEX_TTL_DAYS="$INDEX_TTL_DAYS" \
+    -e FORCE_REINDEX="$FORCE_REINDEX" \
     -e GITHUB_REPO="$GITHUB_REPO" \
     -e GITHUB_BRANCH="$GITHUB_BRANCH" \
     -e REPO_PATH="$REPO_PATH" \
