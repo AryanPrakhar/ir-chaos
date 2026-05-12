@@ -4,6 +4,8 @@ import os
 import pickle
 import re
 import time
+from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import faiss
@@ -23,6 +25,8 @@ from .settings import (
     FINAL_FAISS_WEIGHT,
     GITHUB_BRANCH,
     GITHUB_REPO,
+    INDEX_CHUNK_OVERLAP_CHARS,
+    INDEX_CHUNK_SIZE_CHARS,
     INDEX_DIR,
     INDEX_PATH,
     KRKN_HUB_BRANCH,
@@ -35,12 +39,23 @@ from .settings import (
     RERANK_DOC_CHARS,
     RERANK_MAX_LENGTH,
     RERANK_ONNX_QUANTIZE,
+    RERANK_SUPPORT_PASSAGES,
     RERANK_THREADS,
+    RETRIEVAL_CANDIDATE_K,
     RETRIEVER_MODEL,
+    VECTOR_SEARCH_MULTIPLIER,
 )
 from .ingestion import build_scenario_documents, load_local_scenario_docs
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class IndexEntry:
+    scenario_id: str
+    chunk_id: str
+    text: str
+    passage: str
 
 
 def score_to_match(ce_score: float, faiss_score: float, bm25_score: float) -> float:
@@ -109,8 +124,168 @@ def _bm25_scores(query: str, doc_ids: list[str], doc_texts: dict[str, str]) -> d
 
 def _normalize_score(score: float, min_value: float, max_value: float) -> float:
     if max_value <= min_value:
-        return 0.0
+        return 1.0 if score > 0 else 0.0
     return max(0.0, min(1.0, (score - min_value) / (max_value - min_value)))
+
+
+def _strip_frontmatter(text: str) -> str:
+    if not text:
+        return ""
+    if not text.startswith("---"):
+        return text.strip()
+    parts = text.split("\n---", 1)
+    if len(parts) != 2:
+        return text.strip()
+    return parts[1].strip()
+
+
+def _extract_title(text: str, scenario_id: str) -> str:
+    match = re.search(r"(?im)^title:\s*(.+?)\s*$", text or "")
+    if match:
+        return match.group(1).strip().strip("'\"")
+    return scenario_id.replace("-", " ").title()
+
+
+def _scenario_aliases(scenario_id: str, title: str) -> list[str]:
+    aliases = {
+        scenario_id.strip(),
+        scenario_id.replace("-", " ").strip(),
+        title.strip(),
+        f"krknctl run {scenario_id}".strip(),
+    }
+    return [alias for alias in sorted(aliases) if alias]
+
+
+def _summary_paragraph(text: str) -> str:
+    body = _strip_frontmatter(text)
+    body = re.sub(r"```.*?```", " ", body, flags=re.DOTALL)
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", body) if part.strip()]
+    for paragraph in paragraphs:
+        cleaned = re.sub(r"\s+", " ", paragraph).strip()
+        if cleaned:
+            return cleaned[:600]
+    return ""
+
+
+def _search_text_for_scenario(scenario_id: str, text: str) -> str:
+    title = _extract_title(text, scenario_id)
+    aliases = _scenario_aliases(scenario_id, title)
+    summary = _summary_paragraph(text)
+    header_parts = [
+        f"Scenario ID: {scenario_id}",
+        f"Scenario Name: {title}",
+        f"Aliases: {', '.join(aliases)}",
+        f"Command: krknctl run {scenario_id}",
+    ]
+    if summary:
+        header_parts.append(f"Summary: {summary}")
+    body = _strip_frontmatter(text)
+    return "\n".join(header_parts) + "\n\n" + body
+
+
+def _chunk_paragraphs(text: str, chunk_size: int, overlap: int) -> list[str]:
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", text or "") if part.strip()]
+    if not paragraphs:
+        return []
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    for paragraph in paragraphs:
+        paragraph_len = len(paragraph)
+        projected_len = current_len + paragraph_len + (2 if current else 0)
+        if current and projected_len > chunk_size:
+            chunk = "\n\n".join(current).strip()
+            if chunk:
+                chunks.append(chunk)
+            if overlap > 0:
+                overlap_parts: list[str] = []
+                overlap_len = 0
+                for existing in reversed(current):
+                    overlap_parts.insert(0, existing)
+                    overlap_len += len(existing) + 2
+                    if overlap_len >= overlap:
+                        break
+                current = overlap_parts
+                current_len = len("\n\n".join(current))
+            else:
+                current = []
+                current_len = 0
+        current.append(paragraph)
+        current_len = len("\n\n".join(current))
+
+    final_chunk = "\n\n".join(current).strip()
+    if final_chunk:
+        chunks.append(final_chunk)
+    return chunks
+
+
+def _build_index_entries(docs: list[tuple[str, str]]) -> list[IndexEntry]:
+    entries: list[IndexEntry] = []
+    for scenario_id, text in docs:
+        search_text = _search_text_for_scenario(scenario_id, text)
+        title = _extract_title(text, scenario_id)
+        aliases = _scenario_aliases(scenario_id, title)
+        synopsis = "\n".join(
+            [
+                f"Scenario ID: {scenario_id}",
+                f"Scenario Name: {title}",
+                f"Aliases: {', '.join(aliases)}",
+                f"Command: krknctl run {scenario_id}",
+            ]
+        )
+        body = _strip_frontmatter(text)
+        passages = _chunk_paragraphs(body, INDEX_CHUNK_SIZE_CHARS, INDEX_CHUNK_OVERLAP_CHARS)
+        if not passages:
+            passages = [body or search_text]
+
+        overview = _summary_paragraph(text) or passages[0]
+        entries.append(
+            IndexEntry(
+                scenario_id=scenario_id,
+                chunk_id=f"{scenario_id}::overview",
+                passage=overview,
+                text=f"{synopsis}\n\nOverview:\n{overview}",
+            )
+        )
+
+        for idx, passage in enumerate(passages, start=1):
+            entries.append(
+                IndexEntry(
+                    scenario_id=scenario_id,
+                    chunk_id=f"{scenario_id}::chunk::{idx}",
+                    passage=passage,
+                    text=f"{synopsis}\n\nReference:\n{passage}",
+                )
+            )
+    return entries
+
+
+def _scenario_support_text(
+    *,
+    scenario_id: str,
+    scenario_text: str,
+    support_passages: list[str],
+) -> str:
+    title = _extract_title(scenario_text, scenario_id)
+    aliases = _scenario_aliases(scenario_id, title)
+    parts = [
+        f"Scenario ID: {scenario_id}",
+        f"Scenario Name: {title}",
+        f"Aliases: {', '.join(aliases)}",
+        f"Command: krknctl run {scenario_id}",
+    ]
+    summary = _summary_paragraph(scenario_text)
+    if summary:
+        parts.append(f"Summary: {summary}")
+
+    if support_passages:
+        parts.append("Top matching passages:")
+        parts.extend(support_passages[: max(1, RERANK_SUPPORT_PASSAGES)])
+    else:
+        parts.append(compact_for_reranking(_strip_frontmatter(scenario_text)))
+
+    return compact_for_reranking("\n\n".join(parts))
 
 
 def cuda_runtime_works() -> bool:
@@ -360,6 +535,8 @@ class BaseRanker:
         self.faiss_index = None
         self.doc_ids: list[str] = []
         self.doc_texts: dict[str, str] = {}
+        self.index_entries: list[IndexEntry] = []
+        self.search_texts: dict[str, str] = {}
         self.cross_encoder: OnnxCrossEncoder | None = None
         self._load_index()
 
@@ -379,7 +556,30 @@ class BaseRanker:
         if Path(INDEX_PATH).exists() and Path(META_PATH).exists():
             self.faiss_index = faiss.read_index(INDEX_PATH)
             with open(META_PATH, "rb") as handle:
-                self.doc_ids = pickle.load(handle)
+                payload = pickle.load(handle)
+            if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+                self.index_entries = [
+                    IndexEntry(
+                        scenario_id=str(row.get("scenario_id") or ""),
+                        chunk_id=str(row.get("chunk_id") or ""),
+                        text=str(row.get("text") or ""),
+                        passage=str(row.get("passage") or ""),
+                    )
+                    for row in payload
+                    if row.get("scenario_id")
+                ]
+            elif isinstance(payload, list):
+                self.index_entries = [
+                    IndexEntry(
+                        scenario_id=str(doc_id),
+                        chunk_id=f"{doc_id}::legacy",
+                        text="",
+                        passage="",
+                    )
+                    for doc_id in payload
+                    if str(doc_id).strip()
+                ]
+            self.doc_ids = sorted({entry.scenario_id for entry in self.index_entries})
 
     def _load_doc_texts(self, docs_dir: str = DOCS_DIR) -> None:
         if self.doc_texts:
@@ -395,11 +595,19 @@ class BaseRanker:
                     if row.get("id") and row.get("text")
                 }
                 if self.doc_texts:
+                    self.search_texts = {
+                        doc_id: _search_text_for_scenario(doc_id, text)
+                        for doc_id, text in self.doc_texts.items()
+                    }
                     return
             except Exception:
                 self.doc_texts = {}
 
         self.doc_texts = {doc_id: text for doc_id, text in self._scenario_docs(docs_dir)}
+        self.search_texts = {
+            doc_id: _search_text_for_scenario(doc_id, text)
+            for doc_id, text in self.doc_texts.items()
+        }
 
     def build_index(self, docs_dir: str = DOCS_DIR) -> None:
         self._init_models()
@@ -414,11 +622,15 @@ class BaseRanker:
         )
         if not docs:
             raise RuntimeError("No documents available for indexing")
-        texts = [text for _, text in docs]
-        ids = [doc_id for doc_id, _ in docs]
-        scenario_ids = sorted(set(ids))
-        logger.info("Scenario IDs (%d):\n%s", len(scenario_ids), "\n".join(scenario_ids))
+        scenario_ids = [doc_id for doc_id, _ in docs]
         self.doc_texts = dict(docs)
+        self.search_texts = {
+            doc_id: _search_text_for_scenario(doc_id, text)
+            for doc_id, text in docs
+        }
+        self.index_entries = _build_index_entries(docs)
+        texts = [entry.text for entry in self.index_entries]
+        logger.info("Scenario IDs (%d):\n%s", len(scenario_ids), "\n".join(scenario_ids))
         embeddings = self._embed_documents(texts)
         index = faiss.IndexFlatIP(embeddings.shape[1])
         index.add(embeddings)
@@ -434,14 +646,35 @@ class BaseRanker:
             logger.warning("Failed to write scenario list: %s", exc)
         faiss.write_index(index, INDEX_PATH)
         with open(META_PATH, "wb") as handle:
-            pickle.dump(ids, handle)
-        docs_payload = {"docs": [{"id": doc_id, "text": text} for doc_id, text in docs]}
+            pickle.dump(
+                [
+                    {
+                        "scenario_id": entry.scenario_id,
+                        "chunk_id": entry.chunk_id,
+                        "text": entry.text,
+                        "passage": entry.passage,
+                    }
+                    for entry in self.index_entries
+                ],
+                handle,
+            )
+        docs_payload = {
+            "docs": [{"id": doc_id, "text": text} for doc_id, text in docs],
+            "entries": [
+                {
+                    "scenario_id": entry.scenario_id,
+                    "chunk_id": entry.chunk_id,
+                    "passage": entry.passage,
+                }
+                for entry in self.index_entries
+            ],
+        }
         Path(DOCS_CACHE_PATH).write_text(
             json.dumps(docs_payload, indent=2),
             encoding="utf-8",
         )
         self.faiss_index = index
-        self.doc_ids = ids
+        self.doc_ids = scenario_ids
 
     def find_match(self, query: str, retrieve_k: int = 10, rerank_k: int = 5) -> list[dict]:
         if self.faiss_index is None:
@@ -453,8 +686,10 @@ class BaseRanker:
             retrieve_k=retrieve_k,
             rerank_k=rerank_k,
             faiss_index=self.faiss_index,
+            index_entries=self.index_entries,
             doc_ids=self.doc_ids,
             doc_texts=self.doc_texts,
+            search_texts=self.search_texts,
             embed_query=self._embed_query,
             reranker=self.cross_encoder,
         )
@@ -560,30 +795,62 @@ def run_retrieval(
     retrieve_k: int,
     rerank_k: int,
     faiss_index,
+    index_entries: list[IndexEntry],
     doc_ids: list[str],
     doc_texts: dict[str, str],
+    search_texts: dict[str, str],
     embed_query,
     reranker: OnnxCrossEncoder,
 ) -> list[dict]:
     started = time.perf_counter()
     retrieval_started = time.perf_counter()
     query_embedding = embed_query(query).reshape(1, -1)
-    faiss_top_k = min(retrieve_k, len(doc_ids))
-    scores, indices = faiss_index.search(query_embedding, faiss_top_k)
-    faiss_scores: dict[str, float] = {}
-    if faiss_top_k > 0:
-        for offset, idx in enumerate(indices[0]):
-            if idx < 0 or idx >= len(doc_ids):
-                continue
-            faiss_scores[doc_ids[idx]] = float(scores[0][offset])
+    vector_top_k = min(
+        len(index_entries),
+        max(
+            retrieve_k,
+            RETRIEVAL_CANDIDATE_K,
+            rerank_k * VECTOR_SEARCH_MULTIPLIER,
+            retrieve_k * VECTOR_SEARCH_MULTIPLIER,
+        ),
+    )
+    scores, indices = faiss_index.search(query_embedding, vector_top_k)
 
-    bm25_scores = _bm25_scores(query, doc_ids, doc_texts)
+    vector_scores: dict[str, list[float]] = defaultdict(list)
+    support_passages: dict[str, list[tuple[float, str]]] = defaultdict(list)
+    if vector_top_k > 0:
+        for offset, idx in enumerate(indices[0]):
+            if idx < 0 or idx >= len(index_entries):
+                continue
+            entry = index_entries[idx]
+            raw_score = float(scores[0][offset])
+            vector_scores[entry.scenario_id].append(raw_score)
+            if entry.passage:
+                support_passages[entry.scenario_id].append((raw_score, entry.passage))
+
+    faiss_scores: dict[str, float] = {}
+    for scenario_id, values in vector_scores.items():
+        ranked = sorted(values, reverse=True)
+        best = ranked[0]
+        mean_top = float(sum(ranked[: min(3, len(ranked))])) / float(min(3, len(ranked)))
+        faiss_scores[scenario_id] = (0.8 * best) + (0.2 * mean_top)
+
+    scenario_ids = sorted(set(doc_ids) | set(doc_texts.keys()))
+    bm25_scores = _bm25_scores(query, scenario_ids, search_texts)
+    candidate_k = min(
+        len(scenario_ids),
+        max(retrieve_k, RETRIEVAL_CANDIDATE_K, rerank_k * 4),
+    )
     bm25_top_ids = [
         doc_id
-        for doc_id, _ in sorted(bm25_scores.items(), key=lambda item: item[1], reverse=True)[:faiss_top_k]
+        for doc_id, _ in sorted(bm25_scores.items(), key=lambda item: item[1], reverse=True)[:candidate_k]
+    ]
+    faiss_top_ids = [
+        doc_id
+        for doc_id, _ in sorted(faiss_scores.items(), key=lambda item: item[1], reverse=True)[:candidate_k]
     ]
 
-    candidate_ids = list(dict.fromkeys(list(faiss_scores.keys()) + bm25_top_ids))
+    candidate_ids = list(dict.fromkeys(faiss_top_ids + bm25_top_ids))
     retrieve_ms = (time.perf_counter() - retrieval_started) * 1000
 
     faiss_values = list(faiss_scores.values()) or [0.0]
@@ -606,6 +873,30 @@ def run_retrieval(
             ) / retriever_weight_total
         else:
             retrieval_score = faiss_norm
+        ranked_support = sorted(
+            support_passages.get(doc_id, []),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        unique_support: list[str] = []
+        seen_support = set()
+        query_terms = set(_tokenize(query))
+        rerank_candidates = sorted(
+            ranked_support,
+            key=lambda item: (
+                len(query_terms & set(_tokenize(item[1]))),
+                item[0],
+            ),
+            reverse=True,
+        )
+        for _, passage in rerank_candidates:
+            cleaned = passage.strip()
+            if not cleaned or cleaned in seen_support:
+                continue
+            unique_support.append(cleaned)
+            seen_support.add(cleaned)
+            if len(unique_support) >= max(1, RERANK_SUPPORT_PASSAGES):
+                break
         candidates.append(
             {
                 "id": doc_id,
@@ -613,6 +904,7 @@ def run_retrieval(
                 "retrieval_score": retrieval_score,
                 "faiss_score": faiss_norm,
                 "bm25_score": bm25_norm,
+                "support_passages": unique_support,
             }
         )
 
@@ -620,11 +912,25 @@ def run_retrieval(
     if not candidates:
         return []
 
-    expensive_k = RERANK_CANDIDATE_K if RERANK_CANDIDATE_K > 0 else rerank_k
+    expensive_k = (
+        min(len(candidates), RERANK_CANDIDATE_K)
+        if RERANK_CANDIDATE_K > 0
+        else min(len(candidates), max(rerank_k, RETRIEVAL_CANDIDATE_K, rerank_k * 4))
+    )
     candidates = candidates[: max(1, min(len(candidates), expensive_k))]
 
     rerank_started = time.perf_counter()
-    pairs = [[query, compact_for_reranking(candidate["text"])] for candidate in candidates]
+    pairs = [
+        [
+            query,
+            _scenario_support_text(
+                scenario_id=candidate["id"],
+                scenario_text=candidate["text"],
+                support_passages=list(candidate.get("support_passages") or []),
+            ),
+        ]
+        for candidate in candidates
+    ]
     rerank_scores = reranker.compute_score(pairs, batch_size=RERANK_BATCH_SIZE)
     rerank_ms = (time.perf_counter() - rerank_started) * 1000
 
@@ -636,6 +942,7 @@ def run_retrieval(
             "retrieval_score": candidate["retrieval_score"],
             "faiss_score": candidate["faiss_score"],
             "bm25_score": candidate["bm25_score"],
+            "support_passages": candidate.get("support_passages", []),
         }
         for candidate, score in zip(candidates, rerank_scores)
     ]
