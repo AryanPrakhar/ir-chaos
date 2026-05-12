@@ -217,6 +217,13 @@ if [[ -n "$LOCAL_DOCS_PATH" ]]; then
   fi
 fi
 
+DOCS_MOUNT_ARGS=()
+if [[ -d "$ROOT_DIR/docs" ]]; then
+  DOCS_MOUNT_ARGS=(-v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX")
+else
+  vlog "      Local docs directory missing; retriever will fetch docs from GitHub"
+fi
+
 now_ms() {
   # macOS-compatible millisecond timestamp (date +%s%3N not available on macOS)
   if [[ "$HOST_OS" == "darwin" ]]; then
@@ -484,6 +491,9 @@ run_engine_with_stdin() {
 
 run_retriever_python() {
   local run_args=(--entrypoint python3)
+  if [[ -n "${DOCS_MOUNT_ARGS+x}" ]] && [[ ${#DOCS_MOUNT_ARGS[@]} -gt 0 ]]; then
+    run_args+=("${DOCS_MOUNT_ARGS[@]}")
+  fi
   if [[ -n "${LLAMA_MOUNT_ARGS+x}" ]] && [[ ${#LLAMA_MOUNT_ARGS[@]} -gt 0 ]]; then
     run_args+=("${LLAMA_MOUNT_ARGS[@]}")
   fi
@@ -495,6 +505,9 @@ run_retriever_python() {
 
 start_api_standby() {
   local run_args=()
+  if [[ -n "${DOCS_MOUNT_ARGS+x}" ]] && [[ ${#DOCS_MOUNT_ARGS[@]} -gt 0 ]]; then
+    run_args+=("${DOCS_MOUNT_ARGS[@]}")
+  fi
   if [[ -n "${LLAMA_MOUNT_ARGS+x}" ]] && [[ ${#LLAMA_MOUNT_ARGS[@]} -gt 0 ]]; then
     run_args+=("${LLAMA_MOUNT_ARGS[@]}")
   fi
@@ -511,7 +524,6 @@ start_api_standby() {
         -p "127.0.0.1:${COMPAT_PORT}:8080" \
         -p "127.0.0.1:${DEBUG_PORT}:18080" \
         -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
-        -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
         -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
         -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
         -e DOCS_DIR=/app/docs \
@@ -549,7 +561,6 @@ start_api_standby() {
         -p "127.0.0.1:${COMPAT_PORT}:8080" \
         -p "127.0.0.1:${DEBUG_PORT}:18080" \
         -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
-        -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
         -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
         -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
         -e DOCS_DIR=/app/docs \
@@ -871,7 +882,6 @@ fi
 if [[ "$should_reindex" == "1" ]]; then
   run_cmd run_retriever_python \
     -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
-    -v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX" \
     -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
     -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
     -e DOCS_DIR=/app/docs \
