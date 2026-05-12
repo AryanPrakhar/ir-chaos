@@ -77,7 +77,7 @@ RUN if [ "$TORCH_BUILD" = "cuda" ]; then \
       "optimum[onnxruntime]" \
       requests
 
-COPY krkn-retriever/ /app/
+COPY krkn-assist/ /app/
 COPY docs/ /app/docs/
 
 EXPOSE 8080 18080

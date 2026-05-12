@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from krkn_retriever.cli import main
+from assist.cli import main
 
 
 if __name__ == "__main__":

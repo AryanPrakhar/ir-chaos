@@ -4,12 +4,12 @@ set -euo pipefail
 # krkn-assist pipeline: retrieves and reranks results
 #
 # Usage:
-#   ./scripts/pipeline_retrieve_only.sh [query] [retrieve-k] [rerank-k] [--verbose]
+#   ./scripts/pipeline_assist.sh [query] [retrieve-k] [rerank-k] [--verbose]
 #   (No query starts interactive mode)
 #
 # Optional environment variables:
 #   CONTAINER_ENGINE=podman|docker
-#   RETRIEVER_IMAGE=krkn-retriever:fastapi
+#   RETRIEVER_IMAGE=krkn-assist:fastapi
 #   RETRIEVER_DOCKERFILE=/path/to/Dockerfile
 #   RETRIEVER_COMPAT_PORT=8080    # host port for /v1/chat/completions
 #   RETRIEVER_DEBUG_PORT=18080    # host port for /retrieve and /debug/*
@@ -67,14 +67,14 @@ fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SHARED_DIR="$ROOT_DIR/shared"
-INDEX_FILE="$ROOT_DIR/krkn-retriever/faiss-index/krkn-scenarios.index"
-META_FILE="$ROOT_DIR/krkn-retriever/faiss-index/krkn-scenarios.meta"
-DOCS_CACHE_FILE="$ROOT_DIR/krkn-retriever/faiss-index/krkn-scenarios.docs.json"
+INDEX_FILE="$ROOT_DIR/krkn-assist/faiss-index/krkn-scenarios.index"
+META_FILE="$ROOT_DIR/krkn-assist/faiss-index/krkn-scenarios.meta"
+DOCS_CACHE_FILE="$ROOT_DIR/krkn-assist/faiss-index/krkn-scenarios.docs.json"
 HF_CACHE_DIR="${HF_CACHE_DIR:-$ROOT_DIR/.cache/huggingface}"
 TORCH_CACHE_DIR="${TORCH_CACHE_DIR:-$ROOT_DIR/.cache/torch}"
 ENGINE="${CONTAINER_ENGINE:-podman}"
-IMAGE="${RETRIEVER_IMAGE:-krkn-retriever:fastapi}"
-DOCKERFILE="${RETRIEVER_DOCKERFILE:-$ROOT_DIR/krkn-retriever/Dockerfile}"
+IMAGE="${RETRIEVER_IMAGE:-krkn-assist:fastapi}"
+DOCKERFILE="${RETRIEVER_DOCKERFILE:-$ROOT_DIR/krkn-assist/Dockerfile}"
 FORCE_BUILD="${RETRIEVER_FORCE_BUILD:-0}"
 FORCE_REINDEX_RAW="${FORCE_REINDEX:-${RETRIEVER_FORCE_REINDEX:-0}}"
 FORCE_REINDEX="false"
@@ -523,7 +523,7 @@ start_api_standby() {
         "${run_args[@]}" \
         -p "127.0.0.1:${COMPAT_PORT}:8080" \
         -p "127.0.0.1:${DEBUG_PORT}:18080" \
-        -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
+        -v "$ROOT_DIR/krkn-assist:/app$MOUNT_LABEL_SUFFIX" \
         -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
         -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
         -e DOCS_DIR=/app/docs \
@@ -560,7 +560,7 @@ start_api_standby() {
         "${run_args[@]}" \
         -p "127.0.0.1:${COMPAT_PORT}:8080" \
         -p "127.0.0.1:${DEBUG_PORT}:18080" \
-        -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
+        -v "$ROOT_DIR/krkn-assist:/app$MOUNT_LABEL_SUFFIX" \
         -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
         -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
         -e DOCS_DIR=/app/docs \
@@ -881,7 +881,7 @@ fi
 
 if [[ "$should_reindex" == "1" ]]; then
   run_cmd run_retriever_python \
-    -v "$ROOT_DIR/krkn-retriever:/app$MOUNT_LABEL_SUFFIX" \
+    -v "$ROOT_DIR/krkn-assist:/app$MOUNT_LABEL_SUFFIX" \
     -v "$HF_CACHE_DIR:/root/.cache/huggingface$MOUNT_LABEL_SUFFIX" \
     -v "$TORCH_CACHE_DIR:/root/.cache/torch$MOUNT_LABEL_SUFFIX" \
     -e DOCS_DIR=/app/docs \

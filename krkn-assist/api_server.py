@@ -5,8 +5,8 @@ import os
 
 import uvicorn
 
-from krkn_retriever.api import app as compat_app
-from krkn_retriever.debug_api import app as debug_app
+from assist.api import app as compat_app
+from assist.debug_api import app as debug_app
 
 
 async def _serve(app, host: str, port: int, log_level: str) -> None:

@@ -40,7 +40,7 @@ QUERY_CACHE_SIZE = int(os.environ.get("RETRIEVER_QUERY_CACHE_SIZE", "256"))
 
 RELEVANCE_THRESHOLD = float(os.environ.get("RELEVANCE_THRESHOLD", str(MIN_MATCH_SCORE)))
 SERVICE_NAME = os.environ.get("RETRIEVER_SERVICE_NAME", "krknctl-assist")
-SERVICE_MODEL = os.environ.get("RETRIEVER_SERVICE_MODEL", "krkn-retriever")
+SERVICE_MODEL = os.environ.get("RETRIEVER_SERVICE_MODEL", "krkn-assist")
 INDEX_TTL_SECONDS = max(0.0, float(INDEX_TTL_DAYS)) * 86400.0
 
 ranker = None
