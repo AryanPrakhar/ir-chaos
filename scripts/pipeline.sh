@@ -2,8 +2,7 @@
 set -euo pipefail
 
 # Backward-compatible wrapper.
-# The main entrypoint lives in pipeline_retrieve_only.sh.
+# The main entrypoint lives in pipeline_assist.sh.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-exec "$SCRIPT_DIR/pipeline_retrieve_only.sh" "$@"
-
+exec "$SCRIPT_DIR/pipeline_assist.sh" "$@"

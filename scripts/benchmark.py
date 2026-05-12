@@ -105,12 +105,12 @@ def _progress_summary(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Benchmark krkn-retriever on krkn-retriever/data.csv via debug API (/retrieve)."
+        description="Benchmark krkn-assist on krkn-assist/data.csv via debug API (/retrieve)."
     )
     parser.add_argument(
         "--csv",
-        default=str(Path("krkn-retriever") / "data.csv"),
-        help="Path to data.csv (default: krkn-retriever/data.csv)",
+        default=str(Path("krkn-assist") / "data.csv"),
+        help="Path to data.csv (default: krkn-assist/data.csv)",
     )
     parser.add_argument(
         "--base-url",

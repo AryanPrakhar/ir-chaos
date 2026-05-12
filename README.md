@@ -38,5 +38,8 @@ curl -s -X POST http://127.0.0.1:18080/retrieve -H 'content-type: application/js
 Compat: 
 
 ```
-curl -s -X POST http://127.0.0.1:8080/v1/chat/completions -H 'content-type: application/json' -d '{"model":"krkn-retriever","messages":[{"role":"user","content":"network latency between services"}]}' | jq
+curl -s -X POST http://127.0.0.1:8080/v1/chat/completions -H 'content-type: application/json' -d '{"model":"krkn-assist","messages":[{"role":"user","content":"network latency between services"}]}' | jq
 ```
+
+Benchmark:
+python3 scripts/benchmark.py --n 0 --fr 100 --out bench.json --clear-cache 
