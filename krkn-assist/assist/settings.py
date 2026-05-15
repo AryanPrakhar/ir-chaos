@@ -5,7 +5,10 @@ CROSS_ENCODER_MODEL = os.environ.get(
     "CROSS_ENCODER_MODEL",
     "cross-encoder/ms-marco-MiniLM-L-6-v2",
 )
-RETRIEVER_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+RETRIEVER_MODEL = os.environ.get(
+    "RETRIEVER_MODEL",
+    "sentence-transformers/all-MiniLM-L6-v2",
+)
 
 MIN_FAISS_SCORE = 0.23
 FAISS_TOP2_GAP_THRESHOLD = 0.07
