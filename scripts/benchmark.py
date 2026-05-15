@@ -55,6 +55,13 @@ def _http_post_json(url: str, payload: dict[str, Any], timeout_s: float) -> dict
     return json.loads(raw.decode("utf-8"))
 
 
+def _http_get_json(url: str, timeout_s: float) -> dict[str, Any]:
+    req = Request(url=url, headers={"accept": "application/json"}, method="GET")
+    with urlopen(req, timeout=timeout_s) as resp:
+        raw = resp.read()
+    return json.loads(raw.decode("utf-8"))
+
+
 def _load_samples(csv_path: Path) -> list[Sample]:
     with csv_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -195,6 +202,7 @@ def main() -> int:
     samples = samples[:total]
 
     endpoint = args.base_url.rstrip("/") + "/retrieve"
+    health_endpoint = args.base_url.rstrip("/") + "/health"
     clear_cache_endpoint = args.base_url.rstrip("/") + "/debug/cache/clear"
     k = max(1, int(args.k))
     retrieve_k = max(int(args.retrieve_k), k)
@@ -213,6 +221,17 @@ def main() -> int:
     sample_rows: list[dict[str, Any]] = []
 
     started_wall = time.time()
+    try:
+        _http_get_json(health_endpoint, timeout_s=min(float(args.timeout_s), 10.0))
+    except Exception as exc:
+        print(
+            "Benchmark API is not reachable. Start the debug API first with:\n"
+            "  ./scripts/pipeline.sh --verbose\n\n"
+            f"Health check failed for {health_endpoint}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+
     if args.clear_cache:
         try:
             _http_post_json(clear_cache_endpoint, {}, timeout_s=float(args.timeout_s))

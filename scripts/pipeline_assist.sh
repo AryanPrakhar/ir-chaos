@@ -9,11 +9,12 @@ set -euo pipefail
 #
 # Optional environment variables:
 #   CONTAINER_ENGINE=podman|docker
-#   RETRIEVER_IMAGE=krkn-assist:fastapi
+#   RETRIEVER_IMAGE=quay.io/krkn-chaos/krknctl-assist:faiss-latest
 #   RETRIEVER_DOCKERFILE=/path/to/Dockerfile
 #   RETRIEVER_COMPAT_PORT=8080    # host port for /v1/chat/completions
 #   RETRIEVER_DEBUG_PORT=18080    # host port for /retrieve and /debug/*
 #   RETRIEVER_BACKEND=auto|torch|vulkan
+#   RETRIEVER_MODEL=sentence-transformers/all-MiniLM-L6-v2
 #   RETRIEVER_ACCELERATION=auto|gpu|cpu
 #   LLAMA_EMBED_MODEL=/abs/path/to/model.gguf
 #   LLAMA_RERANKER_MODEL=/abs/path/to/reranker.gguf
@@ -73,7 +74,7 @@ DOCS_CACHE_FILE="$ROOT_DIR/krkn-assist/faiss-index/krkn-scenarios.docs.json"
 HF_CACHE_DIR="${HF_CACHE_DIR:-$ROOT_DIR/.cache/huggingface}"
 TORCH_CACHE_DIR="${TORCH_CACHE_DIR:-$ROOT_DIR/.cache/torch}"
 ENGINE="${CONTAINER_ENGINE:-podman}"
-IMAGE="${RETRIEVER_IMAGE:-krkn-assist:fastapi}"
+IMAGE="${RETRIEVER_IMAGE:-quay.io/krkn-chaos/krknctl-assist:faiss-latest}"
 DOCKERFILE="${RETRIEVER_DOCKERFILE:-$ROOT_DIR/krkn-assist/Dockerfile}"
 FORCE_BUILD="${RETRIEVER_FORCE_BUILD:-0}"
 FORCE_REINDEX_RAW="${FORCE_REINDEX:-${RETRIEVER_FORCE_REINDEX:-0}}"
@@ -97,6 +98,7 @@ AUTO_DOWNLOAD_MODEL="${RETRIEVER_AUTO_DOWNLOAD_MODEL:-1}"
 ACCELERATION_MODE="${RETRIEVER_ACCELERATION:-auto}"
 HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-${HUGGINGFACE_TOKEN:-}}}"
 CROSS_ENCODER_MODEL="${CROSS_ENCODER_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}"
+RETRIEVER_MODEL="${RETRIEVER_MODEL:-sentence-transformers/all-MiniLM-L6-v2}"
 RERANK_MAX_LENGTH="${RERANK_MAX_LENGTH:-192}"
 RERANK_BATCH_SIZE="${RERANK_BATCH_SIZE:-16}"
 RERANK_DOC_CHARS="${RERANK_DOC_CHARS:-1800}"
@@ -132,7 +134,7 @@ HOST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 # passthrough via virtio-gpu/Venus.  Without this, podman silently falls back to
 # the applehv provider which has no GPU device and causes llvmpipe CPU fallback.
 # Respect an explicit override; default to libkrun when unset.
-if [[ "$HOST_OS" == "darwin" && "$ENGINE" == "podman" ]]; then
+if [[ "$HOST_OS" == "darwin" && "$ENGINE" == "podman" && "$BACKEND" == "vulkan" ]]; then
   export CONTAINERS_MACHINE_PROVIDER="${CONTAINERS_MACHINE_PROVIDER:-libkrun}"
 fi
 
@@ -156,8 +158,9 @@ ensure_podman_machine() {
   [[ "$ENGINE" == "podman" ]] || return 0
   [[ "$HOST_OS" == "darwin" ]] || return 0
 
-  # macOS only: ensure provider for Vulkan path.
-  export CONTAINERS_MACHINE_PROVIDER="${CONTAINERS_MACHINE_PROVIDER:-libkrun}"
+  if [[ "$BACKEND" == "vulkan" ]]; then
+    export CONTAINERS_MACHINE_PROVIDER="${CONTAINERS_MACHINE_PROVIDER:-libkrun}"
+  fi
 
   # Create machine if missing.
   if ! "$ENGINE" machine list --format "{{.Name}}" 2>/dev/null | grep -q .; then
@@ -172,8 +175,8 @@ ensure_podman_machine() {
     return 1
   fi
 
-  # Recreate applehv machine so Vulkan can use libkrun path.
-  if "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -qi "applehv"; then
+  # Recreate applehv machine only when Vulkan is explicitly requested.
+  if [[ "$BACKEND" == "vulkan" ]] && "$ENGINE" machine inspect "$machine" 2>/dev/null | grep -qi "applehv"; then
     echo "Recreating podman machine with libkrun (required for Vulkan on macOS): $machine"
     "$ENGINE" machine rm -f "$machine"
     "$ENGINE" machine init --cpus 4 --memory 8192 --disk-size 100
@@ -202,7 +205,7 @@ GPU_RUNTIME_KIND="none"
 GGML_BACKEND_DESIRED=""
 
 MOUNT_LABEL_SUFFIX=""
-if [[ "$ENGINE" == "podman" ]]; then
+if [[ "$ENGINE" == "podman" && "$HOST_OS" != "darwin" ]]; then
   MOUNT_LABEL_SUFFIX=":Z"
 fi
 
@@ -242,6 +245,7 @@ now_ms() {
 PIPELINE_LOG="$(mktemp)"
 QUERY_LOG=""
 API_CONTAINER_ID=""
+API_CONTAINER_NAME="krkn-assist-pipeline-$$"
 # Debug API (internal) default: 18080
 # Compatibility API (public/krknctl) default: 8080
 DEBUG_PORT="${RETRIEVER_DEBUG_PORT:-${RETRIEVER_API_PORT:-18080}}"
@@ -256,8 +260,29 @@ cleanup_logs() {
   if [[ -n "$API_CONTAINER_ID" ]]; then
     "$ENGINE" rm -f "$API_CONTAINER_ID" >/dev/null 2>&1 || true
   fi
+  "$ENGINE" rm -f "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
 }
 trap cleanup_logs EXIT
+
+cleanup_assist_containers() {
+  local ids
+  ids="$("$ENGINE" ps --format '{{.ID}} {{.Names}} {{.Image}} {{.Ports}}' 2>/dev/null \
+    | awk -v compat=":${COMPAT_PORT}->" -v debug=":${DEBUG_PORT}->" \
+      '($0 ~ compat || $0 ~ debug || /krknctl-assist-rag|krknctl-assist-smoke/) {print $1}')"
+  if [[ -n "$ids" ]]; then
+    vlog "      Removing running assist containers on ${COMPAT_PORT}/${DEBUG_PORT}"
+    # shellcheck disable=SC2086
+    "$ENGINE" rm -f $ids >/dev/null 2>&1 || true
+  fi
+
+  ids="$("$ENGINE" ps -a --format '{{.ID}} {{.Names}} {{.Image}}' 2>/dev/null \
+    | awk '/krknctl-assist-rag|krknctl-assist-smoke|krkn-assist-pipeline/ {print $1}')"
+  if [[ -n "$ids" ]]; then
+    vlog "      Removing stale assist containers"
+    # shellcheck disable=SC2086
+    "$ENGINE" rm -f $ids >/dev/null 2>&1 || true
+  fi
+}
 
 run_cmd() {
   if [[ "$VERBOSE" == "1" ]]; then
@@ -410,6 +435,11 @@ configure_acceleration() {
   DEVICE_ARGS=(--device cpu --cpu-only)
   GPU_RUNTIME_KIND="none"
 
+  if [[ "$BACKEND" == "torch" ]]; then
+    GGML_BACKEND_DESIRED=""
+    return
+  fi
+
   # macOS: Vulkan acceleration via libkrun + virtio-gpu + Mesa Venus.
   # The libkrun VM exposes /dev/dri inside the VM; podman does NOT forward it to
   # containers automatically.  --device /dev/dri is the one flag that bridges the
@@ -518,7 +548,8 @@ start_api_standby() {
   local container_id
   if [[ -n "${GPU_FLAGS+x}" ]] && [[ ${#GPU_FLAGS[@]} -gt 0 ]]; then
     container_id=$(
-      "$ENGINE" run -d --rm \
+      "$ENGINE" run -d \
+        --name "$API_CONTAINER_NAME" \
         "${GPU_FLAGS[@]}" \
         "${run_args[@]}" \
         -p "127.0.0.1:${COMPAT_PORT}:8080" \
@@ -536,6 +567,7 @@ start_api_standby() {
         -e KRKN_HUB_BRANCH="$KRKN_HUB_BRANCH" \
         -e LOCAL_DOCS_PATH="$LOCAL_DOCS_ENV_PATH" \
         -e RETRIEVER_BACKEND="$BACKEND" \
+        -e RETRIEVER_MODEL="$RETRIEVER_MODEL" \
         -e CROSS_ENCODER_MODEL="$CROSS_ENCODER_MODEL" \
         -e RERANK_MAX_LENGTH="$RERANK_MAX_LENGTH" \
         -e RERANK_BATCH_SIZE="$RERANK_BATCH_SIZE" \
@@ -556,7 +588,8 @@ start_api_standby() {
     )
   else
     container_id=$(
-      "$ENGINE" run -d --rm \
+      "$ENGINE" run -d \
+        --name "$API_CONTAINER_NAME" \
         "${run_args[@]}" \
         -p "127.0.0.1:${COMPAT_PORT}:8080" \
         -p "127.0.0.1:${DEBUG_PORT}:18080" \
@@ -573,6 +606,7 @@ start_api_standby() {
         -e KRKN_HUB_BRANCH="$KRKN_HUB_BRANCH" \
         -e LOCAL_DOCS_PATH="$LOCAL_DOCS_ENV_PATH" \
         -e RETRIEVER_BACKEND="$BACKEND" \
+        -e RETRIEVER_MODEL="$RETRIEVER_MODEL" \
         -e CROSS_ENCODER_MODEL="$CROSS_ENCODER_MODEL" \
         -e RERANK_MAX_LENGTH="$RERANK_MAX_LENGTH" \
         -e RERANK_BATCH_SIZE="$RERANK_BATCH_SIZE" \
@@ -776,8 +810,8 @@ mkdir -p "$SHARED_DIR" "$HF_CACHE_DIR" "$TORCH_CACHE_DIR"
 # Platform-specific backend defaults
 if [[ "$BACKEND" == "auto" ]]; then
   if [[ "$HOST_OS" == "darwin" || "$HOST_OS" == "macos" ]]; then
-    BACKEND="vulkan"
-    vlog "macOS detected; using llama.cpp backend for Vulkan acceleration"
+    BACKEND="torch"
+    vlog "macOS detected; using torch backend for reliable local setup"
   else
     BACKEND="torch"
     vlog "$HOST_OS detected; using torch backend"
@@ -864,7 +898,7 @@ vlog ""
 vlog "[2/3] Ensuring FAISS index exists"
 STEP_START_MS="$(now_ms)"
 should_reindex=0
-if [[ -f "$INDEX_FILE" && -f "$META_FILE" ]]; then
+if [[ -f "$INDEX_FILE" && -f "$META_FILE" && -f "$DOCS_CACHE_FILE" ]]; then
   if [[ "$FORCE_REINDEX" == "true" ]]; then
     vlog "      FORCE_REINDEX enabled, rebuilding"
     should_reindex=1
@@ -875,7 +909,7 @@ if [[ -f "$INDEX_FILE" && -f "$META_FILE" ]]; then
     vlog "      FAISS index already present, skipping indexing"
   fi
 else
-  vlog "      FAISS index missing, building now..."
+  vlog "      FAISS index assets missing, building now..."
   should_reindex=1
 fi
 
@@ -894,6 +928,7 @@ if [[ "$should_reindex" == "1" ]]; then
     -e KRKN_HUB_BRANCH="$KRKN_HUB_BRANCH" \
     -e LOCAL_DOCS_PATH="$LOCAL_DOCS_ENV_PATH" \
     -e RETRIEVER_BACKEND="$BACKEND" \
+    -e RETRIEVER_MODEL="$RETRIEVER_MODEL" \
     -e CROSS_ENCODER_MODEL="$CROSS_ENCODER_MODEL" \
     -e RERANK_MAX_LENGTH="$RERANK_MAX_LENGTH" \
     -e RERANK_BATCH_SIZE="$RERANK_BATCH_SIZE" \
@@ -921,8 +956,9 @@ vlog ""
 vlog "[3/3] Running retrieval and reranking query"
 STEP_START_MS="$(now_ms)"
 QUERY_LOG="$(mktemp)"
-  vlog "      Starting debug API service on $API_BASE_URL"
-  vlog "      Starting compat API service on $COMPAT_BASE_URL"
+cleanup_assist_containers
+vlog "      Starting debug API service on $API_BASE_URL"
+vlog "      Starting compat API service on $COMPAT_BASE_URL"
 if ! start_api_standby >>"$PIPELINE_LOG" 2>&1; then
   echo "Error: failed to start standby API container."
   tail -n 40 "$PIPELINE_LOG"
@@ -930,8 +966,11 @@ if ! start_api_standby >>"$PIPELINE_LOG" 2>&1; then
 fi
 if ! wait_for_api_ready; then
   echo "Error: standby API did not become ready."
+  "$ENGINE" ps -a --filter "name=$API_CONTAINER_NAME" || true
   if [[ -n "$API_CONTAINER_ID" ]]; then
     "$ENGINE" logs "$API_CONTAINER_ID" | tail -n 60 || true
+  else
+    "$ENGINE" logs "$API_CONTAINER_NAME" | tail -n 60 || true
   fi
   exit 1
 fi

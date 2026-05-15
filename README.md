@@ -1,55 +1,71 @@
-````md id="0ljnhh"
-Start the server:
+# krknctl Assist
+
+## One-Call Setup
+
+Use this as the default end-user path. It builds the expected local image,
+precomputes the FAISS assets, verifies the image provenance, builds `krknctl`
+from `gpu_check`, runs an end-to-end assist check, and cleans stale assist
+containers.
 
 ```bash
+cd ~/ir-chaos
+./scripts/setup_krknctl_assist.sh --verify
+```
+
+## Interactive Assist
+
+Launch through the setup wrapper instead of running `krknctl` directly. The
+wrapper clears old containers first and disables terminal suspend while the
+interactive session is active, which avoids the `proxy already running` state
+after an accidental `Ctrl+Z`.
+
+```bash
+cd ~/ir-chaos
+./scripts/setup_krknctl_assist.sh --launch
+```
+
+## Minimal Commands
+
+```bash
+# Clean stale krknctl assist containers.
+./scripts/setup_krknctl_assist.sh --cleanup
+
+# Rebuild and verify from scratch.
+./scripts/setup_krknctl_assist.sh --verify --force-build
+
+# Verify one query and expected scenario.
+./scripts/run_krknctl_integration_mac.sh \
+  "Gimme the krknctl command to cause pod failure in namespace production but exclude any pods labeled env=dev" \
+  pod-scenarios
+
+# Start the debug and compat APIs for local retrieval work.
 ./scripts/pipeline.sh --verbose
-````
 
-This also opens interactive mode and starts the API on:
-
-```
-Debug API:  http://127.0.0.1:18080   (/retrieve, /debug/*)
-Compat API: http://127.0.0.1:8080    (/v1/chat/completions)
+# Run benchmark after the debug API is healthy at http://127.0.0.1:18080.
+./scripts/benchmark.py --n 100 --fr 25 --out bench.json --clear-cache
 ```
 
-Query from another terminal:
+If you run `krknctl` directly, run it from the checkout that contains the
+built binary:
+
+```bash
+cd ~/krknctl
+PATH="$PATH:/opt/homebrew/bin" ./krknctl assist run
+```
+
+## API Endpoints
+
+When `./scripts/pipeline.sh --verbose` is running:
+
+- Debug API: `http://127.0.0.1:18080`
+- Compat API: `http://127.0.0.1:8080`
 
 ```bash
 curl -s http://127.0.0.1:18080/retrieve \
   -H "Content-Type: application/json" \
-  -d '{"query":"network latency between services"}' \
-| jq
-```
+  -d '{"query":"network latency between services","k":5,"rerank_k":3}' | jq
 
-Health check:
-
-```
-curl http://127.0.0.1:18080/health | jq
-```
-
-Quick sanity (after running ./scripts/pipeline.sh --verbose):
-
-Debug: 
-
-```
-curl -s -X POST http://127.0.0.1:18080/retrieve -H 'content-type: application/json' -d '{"query":"network latency between services","k":5,"rerank_k":3}' | jq
-```
-
-Compat: 
-
-```
-curl -s -X POST http://127.0.0.1:8080/v1/chat/completions -H 'content-type: application/json' -d '{"model":"krkn-assist","messages":[{"role":"user","content":"network latency between services"}]}' | jq
-```
-
-Benchmark:
-python3 scripts/benchmark.py --n 0 --fr 100 --out bench.json --clear-cache 
-
-Single-command production setup for `krknctl assist`:
-```bash
-./scripts/setup_krknctl_assist.sh --verify
-```
-
-Quick compatibility wrapper for the Apple Silicon + Podman flow:
-```bash
-./scripts/run_krknctl_integration_mac.sh "network latency between services" network-chaos
+curl -s http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"krkn-assist","messages":[{"role":"user","content":"network latency between services"}]}' | jq
 ```

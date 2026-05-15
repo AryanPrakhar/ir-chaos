@@ -36,6 +36,7 @@ Options:
   --setup-only              Setup/build/smoke-test only; do not run krknctl verification
   --verify                  Run full non-interactive krknctl verification (default)
   --launch                  Setup everything, then launch krknctl assist interactively
+  --cleanup                 Remove krknctl assist containers and exit
   --query TEXT              Verification query (default: "$QUERY")
   --expect SCENARIO         Expected scenario in verification output
   --image TAG               Image tag krknctl should use
@@ -55,6 +56,7 @@ while [[ $# -gt 0 ]]; do
     --setup-only) MODE="setup-only"; shift ;;
     --verify) MODE="verify"; shift ;;
     --launch) MODE="launch"; shift ;;
+    --cleanup) MODE="cleanup"; shift ;;
     --query) QUERY="${2:?missing value for --query}"; shift 2 ;;
     --expect) EXPECTED_SCENARIO="${2:?missing value for --expect}"; shift 2 ;;
     --image) IMAGE="${2:?missing value for --image}"; shift 2 ;;
@@ -569,7 +571,20 @@ launch_krknctl() {
   [[ "$SKIP_KRKNCTL" == "0" ]] || return 0
   stop_assist_containers_on_8080
   log "Launching krknctl assist interactively"
+  local old_stty=""
+  if [[ -t 0 ]] && have stty; then
+    old_stty="$(stty -g 2>/dev/null || true)"
+    stty susp undef 2>/dev/null || true
+  fi
+  set +e
   PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" "$KRKNCTL_DIR/krknctl" assist run
+  local status=$?
+  set -e
+  if [[ -n "$old_stty" ]]; then
+    stty "$old_stty" 2>/dev/null || true
+  fi
+  stop_assist_containers_on_8080
+  return "$status"
 }
 
 cleanup() {
@@ -588,6 +603,14 @@ log "Log: $LOG_FILE"
 ensure_brew_packages
 ensure_basic_tools
 ensure_podman_ready
+
+if [[ "$MODE" == "cleanup" ]]; then
+  stop_assist_containers_on_8080
+  log "✅ krknctl assist cleanup finished"
+  log "Log: $LOG_FILE"
+  exit 0
+fi
+
 build_assist_image
 smoke_test_image
 verify_image_provenance

@@ -7,7 +7,8 @@ claude.md
 venv
 packages/
 docs/
-
+setup-logs/
+logs.md
 # Local environment and key material
 .env
 .env.*
