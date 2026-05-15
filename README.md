@@ -43,3 +43,13 @@ curl -s -X POST http://127.0.0.1:8080/v1/chat/completions -H 'content-type: appl
 
 Benchmark:
 python3 scripts/benchmark.py --n 0 --fr 100 --out bench.json --clear-cache 
+
+Single-command production setup for `krknctl assist`:
+```bash
+./scripts/setup_krknctl_assist.sh --verify
+```
+
+Quick compatibility wrapper for the Apple Silicon + Podman flow:
+```bash
+./scripts/run_krknctl_integration_mac.sh "network latency between services" network-chaos
+```
