@@ -524,7 +524,7 @@ build_image() {
   "$ENGINE" build \
     -t "$IMAGE" \
     -f "$DOCKERFILE" \
-    "${BUILD_ARGS[@]}" \
+    ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} \
     "$ROOT_DIR"
 }
 
@@ -576,7 +576,7 @@ start_api_standby() {
       "$ENGINE" run -d \
         --name "$API_CONTAINER_NAME" \
         "${GPU_FLAGS[@]}" \
-        "${run_args[@]}" \
+        ${run_args[@]+"${run_args[@]}"} \
         -p "127.0.0.1:${COMPAT_PORT}:8080" \
         -p "127.0.0.1:${DEBUG_PORT}:18080" \
         -v "$ROOT_DIR/krkn-assist:/app$MOUNT_LABEL_SUFFIX" \
@@ -615,7 +615,7 @@ start_api_standby() {
     container_id=$(
       "$ENGINE" run -d \
         --name "$API_CONTAINER_NAME" \
-        "${run_args[@]}" \
+        ${run_args[@]+"${run_args[@]}"} \
         -p "127.0.0.1:${COMPAT_PORT}:8080" \
         -p "127.0.0.1:${DEBUG_PORT}:18080" \
         -v "$ROOT_DIR/krkn-assist:/app$MOUNT_LABEL_SUFFIX" \
