@@ -156,7 +156,7 @@ async def lifespan(_: FastAPI):
                 logger.info("Building FAISS index (reason=%s)", reindex_reason)
                 ranker.build_index(DOCS_DIR)
 
-            ranker._init_models()
+            ranker._init_index_models()
             ranker._load_doc_texts()
             _service_ready = True
             logger.info("Retriever ready")
