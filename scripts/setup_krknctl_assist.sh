@@ -110,6 +110,29 @@ have() {
   command -v "$1" >/dev/null 2>&1
 }
 
+stop_stale_krknctl_processes() {
+  have pgrep || return 0
+
+  local pids
+  pids="$(pgrep -f 'krknctl[[:space:]]+assist[[:space:]]+run' 2>/dev/null \
+    | awk -v self="$$" '$1 != self {print $1}')" || true
+  [[ -n "$pids" ]] || return 0
+
+  log "Stopping stale krknctl assist process(es): $pids"
+  # shellcheck disable=SC2086
+  kill $pids >>"$LOG_FILE" 2>&1 || true
+  sleep 2
+
+  local remaining
+  remaining="$(pgrep -f 'krknctl[[:space:]]+assist[[:space:]]+run' 2>/dev/null \
+    | awk -v self="$$" '$1 != self {print $1}')" || true
+  if [[ -n "$remaining" ]]; then
+    log "Force-stopping stale krknctl assist process(es): $remaining"
+    # shellcheck disable=SC2086
+    kill -9 $remaining >>"$LOG_FILE" 2>&1 || true
+  fi
+}
+
 add_homebrew_path() {
   if [[ -d /opt/homebrew/bin ]]; then
     export PATH="/opt/homebrew/bin:$PATH"
@@ -193,6 +216,8 @@ ensure_podman_ready() {
 }
 
 stop_assist_containers_on_8080() {
+  stop_stale_krknctl_processes
+
   local ids
   ids="$(podman ps --format '{{.ID}} {{.Image}} {{.Names}} {{.Ports}}' 2>/dev/null \
     | awk '/8080/ && /krknctl-assist|krkn-assist/ {print $1}')"

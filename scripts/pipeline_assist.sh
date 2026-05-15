@@ -226,6 +226,29 @@ vlog() {
   fi
 }
 
+stop_stale_krknctl_processes() {
+  command -v pgrep >/dev/null 2>&1 || return 0
+
+  local pids
+  pids="$(pgrep -f 'krknctl[[:space:]]+assist[[:space:]]+run' 2>/dev/null \
+    | awk -v self="$$" '$1 != self {print $1}')" || true
+  [[ -n "$pids" ]] || return 0
+
+  vlog "      Stopping stale krknctl assist process(es): $pids"
+  # shellcheck disable=SC2086
+  kill $pids >/dev/null 2>&1 || true
+  sleep 2
+
+  local remaining
+  remaining="$(pgrep -f 'krknctl[[:space:]]+assist[[:space:]]+run' 2>/dev/null \
+    | awk -v self="$$" '$1 != self {print $1}')" || true
+  if [[ -n "$remaining" ]]; then
+    vlog "      Force-stopping stale krknctl assist process(es): $remaining"
+    # shellcheck disable=SC2086
+    kill -9 $remaining >/dev/null 2>&1 || true
+  fi
+}
+
 DOCS_MOUNT_ARGS=()
 if [[ -d "$ROOT_DIR/docs" ]]; then
   DOCS_MOUNT_ARGS=(-v "$ROOT_DIR/docs:/app/docs$MOUNT_LABEL_SUFFIX")
@@ -265,6 +288,8 @@ cleanup_logs() {
 trap cleanup_logs EXIT
 
 cleanup_assist_containers() {
+  stop_stale_krknctl_processes
+
   local ids
   ids="$("$ENGINE" ps --format '{{.ID}} {{.Names}} {{.Image}} {{.Ports}}' 2>/dev/null \
     | awk -v compat=":${COMPAT_PORT}->" -v debug=":${DEBUG_PORT}->" \
