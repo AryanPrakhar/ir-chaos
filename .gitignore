@@ -5,6 +5,8 @@ krkn-retriever/venv
 .claude/
 claude.md
 venv
+packages/
+docs/
 
 # Local environment and key material
 .env

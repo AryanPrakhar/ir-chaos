@@ -1,0 +1,488 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+IMAGE="${KRKNCTL_ASSIST_IMAGE:-quay.io/krkn-chaos/krknctl-assist:faiss-latest}"
+KRKNCTL_REPO="${KRKNCTL_REPO:-https://github.com/krkn-chaos/krknctl.git}"
+KRKNCTL_BRANCH="${KRKNCTL_BRANCH:-gpu_check}"
+KRKNCTL_DIR="${KRKNCTL_DIR:-$HOME/krknctl}"
+QUERY="${KRKNCTL_ASSIST_QUERY:-how do i run a pod deletion scenario}"
+EXPECTED_SCENARIO="${KRKNCTL_ASSIST_EXPECTED:-pod-scenarios}"
+MODE="verify"
+FORCE_BUILD=0
+SKIP_BREW=0
+SKIP_KRKNCTL=0
+HOST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+LOG_DIR="${KRKNCTL_ASSIST_LOG_DIR:-$ROOT_DIR/setup-logs}"
+LOG_FILE="$LOG_DIR/krknctl-assist-setup-$(date -u +%Y%m%dT%H%M%SZ).log"
+SMOKE_CONTAINER=""
+
+usage() {
+  cat <<EOF
+Usage: $0 [options]
+
+Build, smoke-test, and verify krknctl assist with the local krkn-assist image.
+
+Options:
+  --setup-only              Setup/build/smoke-test only; do not run krknctl verification
+  --verify                  Run full non-interactive krknctl verification (default)
+  --launch                  Setup everything, then launch krknctl assist interactively
+  --query TEXT              Verification query (default: "$QUERY")
+  --expect SCENARIO         Expected scenario in verification output
+  --image TAG               Image tag krknctl should use
+  --krknctl-dir PATH        krknctl checkout/install directory
+  --krknctl-branch BRANCH   krknctl branch to build
+  --force-build             Rebuild image even if it already exists
+  --skip-brew               Do not install Homebrew packages
+  --skip-krknctl            Do not clone/build/run krknctl
+  -h, --help                Show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --setup-only) MODE="setup-only"; shift ;;
+    --verify) MODE="verify"; shift ;;
+    --launch) MODE="launch"; shift ;;
+    --query) QUERY="${2:?missing value for --query}"; shift 2 ;;
+    --expect) EXPECTED_SCENARIO="${2:?missing value for --expect}"; shift 2 ;;
+    --image) IMAGE="${2:?missing value for --image}"; shift 2 ;;
+    --krknctl-dir) KRKNCTL_DIR="${2:?missing value for --krknctl-dir}"; shift 2 ;;
+    --krknctl-branch) KRKNCTL_BRANCH="${2:?missing value for --krknctl-branch}"; shift 2 ;;
+    --force-build) FORCE_BUILD=1; shift ;;
+    --skip-brew) SKIP_BREW=1; shift ;;
+    --skip-krknctl) SKIP_KRKNCTL=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
+  esac
+done
+
+mkdir -p "$LOG_DIR"
+touch "$LOG_FILE"
+
+log() {
+  printf '%s\n' "$*" | tee -a "$LOG_FILE"
+}
+
+warn() {
+  log "⚠️  $*"
+}
+
+fail() {
+  log "❌ $*"
+  log "Log: $LOG_FILE"
+  exit 1
+}
+
+run() {
+  log "+ $*"
+  set +e
+  "$@" 2>&1 | tee -a "$LOG_FILE"
+  local status=${PIPESTATUS[0]}
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    fail "Command failed: $*"
+  fi
+}
+
+run_quiet() {
+  log "+ $*"
+  if ! "$@" >>"$LOG_FILE" 2>&1; then
+    tail -n 80 "$LOG_FILE"
+    fail "Command failed: $*"
+  fi
+}
+
+have() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+add_homebrew_path() {
+  if [[ -d /opt/homebrew/bin ]]; then
+    export PATH="/opt/homebrew/bin:$PATH"
+  fi
+  if [[ -d /usr/local/bin ]]; then
+    export PATH="/usr/local/bin:$PATH"
+  fi
+}
+
+ensure_brew_packages() {
+  [[ "$HOST_OS" == "darwin" ]] || return 0
+  add_homebrew_path
+
+  if ! have brew; then
+    fail "Homebrew is required on macOS. Install it first, then rerun this script."
+  fi
+
+  [[ "$SKIP_BREW" == "0" ]] || return 0
+
+  local packages=(git curl podman go pkgconf gpgme)
+  local missing=()
+  local pkg
+  for pkg in "${packages[@]}"; do
+    if ! brew list --versions "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    run brew install "${missing[@]}"
+  else
+    log "✅ Homebrew prerequisites already installed"
+  fi
+}
+
+ensure_basic_tools() {
+  add_homebrew_path
+  local cmd
+  for cmd in git curl podman python3; do
+    have "$cmd" || fail "Missing required command: $cmd"
+  done
+  if [[ "$SKIP_KRKNCTL" == "0" ]]; then
+    have go || fail "Missing required command: go"
+  fi
+}
+
+ensure_podman_ready() {
+  if [[ "$HOST_OS" == "darwin" ]]; then
+    export CONTAINERS_MACHINE_PROVIDER="${CONTAINERS_MACHINE_PROVIDER:-libkrun}"
+
+    if ! podman machine list --format '{{.Name}}' 2>/dev/null | grep -q .; then
+      run podman machine init --cpus 4 --memory 8192 --disk-size 100
+    fi
+
+    local machine
+    machine="$(podman machine list --format '{{.Name}}' 2>/dev/null | head -n1 | sed 's/[*[:space:]]//g')"
+    [[ -n "$machine" ]] || fail "Unable to determine Podman machine name"
+
+    if ! podman machine start "$machine" >>"$LOG_FILE" 2>&1; then
+      if ! grep -qi "already running" "$LOG_FILE"; then
+        fail "Podman machine failed to start"
+      fi
+      log "✅ Podman machine already running"
+    else
+      log "✅ Podman machine running: $machine"
+    fi
+
+    local socket_path
+    socket_path="$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' "$machine" 2>/dev/null || true)"
+    if [[ -n "$socket_path" ]]; then
+      mkdir -p "$HOME/.local/share/containers/podman/machine"
+      ln -sf "$socket_path" "$HOME/.local/share/containers/podman/machine/podman.sock"
+      log "✅ Refreshed Podman socket symlink for krknctl"
+    else
+      warn "Could not discover Podman socket path; krknctl runtime detection may fail"
+    fi
+  fi
+
+  run_quiet podman info
+  log "✅ Podman is reachable"
+}
+
+stop_assist_containers_on_8080() {
+  local ids
+  ids="$(podman ps --format '{{.ID}} {{.Image}} {{.Names}} {{.Ports}}' 2>/dev/null \
+    | awk '/8080/ && /krknctl-assist|krkn-assist/ {print $1}')"
+  if [[ -n "$ids" ]]; then
+    log "Stopping old krkn assist containers bound to port 8080"
+    # shellcheck disable=SC2086
+    run podman stop $ids
+  fi
+
+  if have lsof && lsof -nP -iTCP:8080 -sTCP:LISTEN >/tmp/krknctl-assist-port-8080.$$ 2>/dev/null; then
+    if grep -q . /tmp/krknctl-assist-port-8080.$$; then
+      cat /tmp/krknctl-assist-port-8080.$$ | tee -a "$LOG_FILE"
+      rm -f /tmp/krknctl-assist-port-8080.$$
+      fail "Port 8080 is still in use by a non-assist process. Free it and rerun."
+    fi
+  fi
+  rm -f /tmp/krknctl-assist-port-8080.$$
+}
+
+hash_repo_files() {
+  (
+    cd "$ROOT_DIR/krkn-assist"
+    if have shasum; then
+      shasum -a 256 "$@"
+    else
+      sha256sum "$@"
+    fi
+  )
+}
+
+image_matches_checkout() {
+  podman image exists "$IMAGE" >/dev/null 2>&1 || return 1
+
+  local host_file image_file
+  host_file="$(mktemp)"
+  image_file="$(mktemp)"
+
+  if ! hash_repo_files \
+      api_server.py \
+      assist/api.py \
+      assist/service.py \
+      assist/ranking.py \
+      data.csv \
+      | awk '{print $1 " " $2}' >"$host_file"; then
+    rm -f "$host_file" "$image_file"
+    return 1
+  fi
+
+  if ! podman run --rm --entrypoint sha256sum "$IMAGE" \
+    /app/api_server.py \
+    /app/assist/api.py \
+    /app/assist/service.py \
+    /app/assist/ranking.py \
+    /app/data.csv \
+    | sed 's#/app/##' | awk '{print $1 " " $2}' >"$image_file"; then
+    rm -f "$host_file" "$image_file"
+    return 1
+  fi
+
+  set +e
+  diff -q "$host_file" "$image_file" >/dev/null 2>&1
+  local status=$?
+  set -e
+  rm -f "$host_file" "$image_file"
+  return "$status"
+}
+
+build_assist_image() {
+  if [[ "$FORCE_BUILD" == "0" ]] && image_matches_checkout; then
+    log "✅ Image already present and matches this checkout: $IMAGE"
+    return 0
+  elif [[ "$FORCE_BUILD" == "0" ]] && podman image exists "$IMAGE" >/dev/null 2>&1; then
+    warn "Existing $IMAGE does not match this checkout; rebuilding"
+  fi
+
+  log "Building assist image from repo root so Dockerfile COPY paths resolve"
+  run podman build -f "$ROOT_DIR/krkn-assist/Dockerfile" -t "$IMAGE" "$ROOT_DIR"
+}
+
+wait_for_health() {
+  local base_url="$1"
+  local attempts="${2:-180}"
+  local i
+  for ((i=1; i<=attempts; i++)); do
+    if curl -fsS "$base_url/health" >>"$LOG_FILE" 2>&1; then
+      log "✅ Assist service healthy at $base_url"
+      return 0
+    fi
+    if [[ "$i" == "1" || "$((i % 10))" == "0" ]]; then
+      log "Waiting for assist service... ($i/$attempts)"
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+smoke_test_image() {
+  stop_assist_containers_on_8080
+  SMOKE_CONTAINER="krknctl-assist-smoke-$$"
+  podman rm -f "$SMOKE_CONTAINER" >>"$LOG_FILE" 2>&1 || true
+
+  local container_id
+  container_id="$(podman run -d --name "$SMOKE_CONTAINER" -p 127.0.0.1:8080:8080 "$IMAGE")" \
+    || fail "Unable to start smoke-test container"
+  log "Started smoke-test container: $container_id"
+
+  if ! wait_for_health "http://127.0.0.1:8080" 180; then
+    podman logs "$SMOKE_CONTAINER" 2>&1 | tail -n 120 | tee -a "$LOG_FILE" || true
+    podman rm -f "$SMOKE_CONTAINER" >>"$LOG_FILE" 2>&1 || true
+    SMOKE_CONTAINER=""
+    fail "Assist image did not become healthy"
+  fi
+
+  local response
+  response="$(curl -fsS -X POST http://127.0.0.1:8080/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d "$(python3 - "$QUERY" <<'PY'
+import json
+import sys
+print(json.dumps({"messages": [{"role": "user", "content": sys.argv[1]}]}))
+PY
+)")" || fail "Compat API smoke query failed"
+
+  printf '%s\n' "$response" >>"$LOG_FILE"
+  set +e
+  python3 - "$response" "$EXPECTED_SCENARIO" <<'PY' | tee -a "$LOG_FILE"
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+expected = sys.argv[2]
+content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+scenario = payload.get("scenario_name")
+print(f"Smoke API response: {content}")
+if expected and scenario != expected and expected not in content:
+    print(f"Expected scenario {expected!r}, got scenario_name={scenario!r}, content={content!r}")
+    raise SystemExit(1)
+PY
+  local status=${PIPESTATUS[0]}
+  set -e
+  [[ "$status" -eq 0 ]] || fail "Smoke query did not return expected scenario"
+
+  podman rm -f "$SMOKE_CONTAINER" >>"$LOG_FILE" 2>&1 || true
+  SMOKE_CONTAINER=""
+  log "✅ Direct image smoke test passed"
+}
+
+verify_image_provenance() {
+  local host_file image_file
+  local files=(
+    "api_server.py"
+    "assist/api.py"
+    "assist/service.py"
+    "assist/ranking.py"
+    "data.csv"
+  )
+
+  host_file="$(mktemp)"
+  image_file="$(mktemp)"
+
+  if ! hash_repo_files "${files[@]}" | awk '{print $1 " " $2}' >"$host_file"; then
+    rm -f "$host_file" "$image_file"
+    fail "Unable to hash host files for provenance check"
+  fi
+
+  if ! podman run --rm --entrypoint sha256sum "$IMAGE" \
+    /app/api_server.py \
+    /app/assist/api.py \
+    /app/assist/service.py \
+    /app/assist/ranking.py \
+    /app/data.csv \
+    | sed 's#/app/##' | awk '{print $1 " " $2}' >"$image_file"; then
+    rm -f "$host_file" "$image_file"
+    fail "Unable to hash image files for provenance check"
+  fi
+
+  if ! diff -u "$host_file" "$image_file" >>"$LOG_FILE" 2>&1; then
+    rm -f "$host_file" "$image_file"
+    fail "Image provenance check failed; container contents do not match this checkout"
+  fi
+
+  rm -f "$host_file" "$image_file"
+  log "✅ Image provenance matches this checkout"
+}
+
+ensure_krknctl_checkout() {
+  [[ "$SKIP_KRKNCTL" == "0" ]] || return 0
+
+  if [[ ! -d "$KRKNCTL_DIR/.git" ]]; then
+    mkdir -p "$(dirname "$KRKNCTL_DIR")"
+    run git clone "$KRKNCTL_REPO" "$KRKNCTL_DIR"
+  fi
+
+  run git -C "$KRKNCTL_DIR" fetch origin "$KRKNCTL_BRANCH"
+
+  if ! git -C "$KRKNCTL_DIR" checkout "$KRKNCTL_BRANCH" >>"$LOG_FILE" 2>&1; then
+    local current_branch
+    current_branch="$(git -C "$KRKNCTL_DIR" branch --show-current)"
+    if [[ "$current_branch" != "$KRKNCTL_BRANCH" ]]; then
+      fail "Could not checkout $KRKNCTL_BRANCH in $KRKNCTL_DIR. Resolve local changes and rerun."
+    fi
+    warn "krknctl checkout has local changes; staying on $current_branch"
+  else
+    log "✅ krknctl branch ready: $KRKNCTL_BRANCH"
+  fi
+
+  run go -C "$KRKNCTL_DIR" build -o krknctl .
+  log "✅ krknctl binary built: $KRKNCTL_DIR/krknctl"
+}
+
+verify_krknctl_noninteractive() {
+  [[ "$SKIP_KRKNCTL" == "0" ]] || return 0
+  stop_assist_containers_on_8080
+
+  log "Running non-interactive krknctl assist verification"
+  set +e
+  python3 - "$KRKNCTL_DIR/krknctl" "$QUERY" "$EXPECTED_SCENARIO" "$LOG_FILE" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+binary, query, expected, log_file = sys.argv[1:5]
+env = os.environ.copy()
+env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + env.get("PATH", "")
+
+proc = subprocess.Popen(
+    [binary, "assist", "run"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=True,
+    env=env,
+)
+
+try:
+    output, _ = proc.communicate(f"{query}\n\nexit\n", timeout=420)
+except subprocess.TimeoutExpired:
+    proc.send_signal(signal.SIGINT)
+    try:
+        output, _ = proc.communicate(timeout=20)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        output, _ = proc.communicate()
+    with open(log_file, "a", encoding="utf-8") as handle:
+        handle.write(output)
+    print("krknctl verification timed out")
+    raise SystemExit(1)
+
+with open(log_file, "a", encoding="utf-8") as handle:
+    handle.write(output)
+
+print(output)
+if proc.returncode not in (0, None):
+    print(f"krknctl exited with status {proc.returncode}")
+    raise SystemExit(proc.returncode)
+if "service healthy" not in output and "assist service is ready" not in output:
+    print("krknctl did not report a healthy assist service")
+    raise SystemExit(1)
+if expected and expected not in output:
+    print(f"Expected scenario {expected!r} not found in krknctl output")
+    raise SystemExit(1)
+PY
+  local status=$?
+  set -e
+  stop_assist_containers_on_8080
+  [[ "$status" -eq 0 ]] || fail "krknctl assist verification failed"
+  log "✅ krknctl assist verification passed"
+}
+
+launch_krknctl() {
+  [[ "$SKIP_KRKNCTL" == "0" ]] || return 0
+  stop_assist_containers_on_8080
+  log "Launching krknctl assist interactively"
+  PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" "$KRKNCTL_DIR/krknctl" assist run
+}
+
+cleanup() {
+  if [[ -n "$SMOKE_CONTAINER" ]]; then
+    podman rm -f "$SMOKE_CONTAINER" >>"$LOG_FILE" 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+log "🚀 krknctl assist setup started"
+log "Repo: $ROOT_DIR"
+log "Image: $IMAGE"
+log "Mode: $MODE"
+log "Log: $LOG_FILE"
+
+ensure_brew_packages
+ensure_basic_tools
+ensure_podman_ready
+build_assist_image
+smoke_test_image
+verify_image_provenance
+ensure_krknctl_checkout
+
+case "$MODE" in
+  setup-only) ;;
+  verify) verify_krknctl_noninteractive ;;
+  launch) launch_krknctl ;;
+esac
+
+log "🎉 krknctl assist setup finished successfully"
+log "Log: $LOG_FILE"
