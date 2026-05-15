@@ -22,6 +22,14 @@ _SCENARIO_ID_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _HOW_TO_RUN_PATTERN = re.compile(r"^##\s+How\s+to\s+Run\b.*$", re.IGNORECASE | re.MULTILINE)
+_KRKNCTL_RUN_PATTERN = re.compile(
+    r"krknctl\s+run\s+([a-z0-9][a-z0-9-]*)",
+    re.IGNORECASE,
+)
+_NOT_SUPPORTED_PATTERN = re.compile(
+    r"not yet supported|not currently available via krknctl",
+    re.IGNORECASE,
+)
 
 
 def load_local_scenario_docs(docs_dir: str) -> list[tuple[str, str]]:
@@ -72,6 +80,20 @@ def _strip_scenario_tag_markers(content: str) -> str:
     if not content:
         return ""
     return re.sub(r"</?krkn-hub-scenario[^>]*>", "", content, flags=re.IGNORECASE).strip()
+
+
+def _extract_krknctl_run_scenario_id(content: str) -> str | None:
+    match = _KRKNCTL_RUN_PATTERN.search(content or "")
+    if not match:
+        return None
+    scenario_id = match.group(1).strip()
+    return scenario_id or None
+
+
+def _krknctl_tab_supported(content: str) -> bool:
+    if not content:
+        return False
+    return _NOT_SUPPORTED_PATTERN.search(content) is None
 
 
 def _clone_repository(repo_url: str, dest: str, branch: str | None = None) -> None:
@@ -147,10 +169,10 @@ def persist_merged_scenario_docs(
 
 
 def _collect_scenario_folder_docs(scenarios_root: str) -> dict[str, str]:
-    scenario_docs: dict[str, str] = {}
+    scenario_parts: dict[str, list[str]] = {}
     root_path = Path(scenarios_root)
     if not root_path.exists():
-        return scenario_docs
+        return {}
 
     for root, _, files in os.walk(root_path):
         if "_index.md" not in files or "_tab-krknctl.md" not in files:
@@ -162,29 +184,47 @@ def _collect_scenario_folder_docs(scenarios_root: str) -> dict[str, str]:
         except Exception as exc:
             logger.warning("Failed to read %s: %s", index_path, exc)
             continue
-
-        scenario_id = _extract_scenario_id(index_content)
-        if not scenario_id:
-            scenario_id = Path(root).name
-            logger.warning(
-                "Missing krkn-hub-scenario id in %s; using folder name %s",
-                index_path,
-                scenario_id,
-            )
-
-        index_content = _strip_scenario_tag_markers(_strip_how_to_run(index_content))
         try:
             tab_content = tab_path.read_text(encoding="utf-8").strip()
         except Exception as exc:
             logger.warning("Failed to read %s: %s", tab_path, exc)
             tab_content = ""
 
+        if not _krknctl_tab_supported(tab_content):
+            logger.info(
+                "Skipping %s because the krknctl tab marks it as unsupported",
+                index_path,
+            )
+            continue
+
+        scenario_id = _extract_scenario_id(index_content)
+        if not scenario_id:
+            scenario_id = _extract_krknctl_run_scenario_id(tab_content)
+            if scenario_id:
+                logger.info(
+                    "Derived krknctl scenario id %s from %s",
+                    scenario_id,
+                    tab_path,
+                )
+            else:
+                scenario_id = Path(root).name
+                logger.warning(
+                    "Missing krkn-hub-scenario id in %s; using folder name %s",
+                    index_path,
+                    scenario_id,
+                )
+
+        index_content = _strip_scenario_tag_markers(_strip_how_to_run(index_content))
         parts = [part.strip() for part in [index_content, tab_content] if part and part.strip()]
         if not parts:
             continue
-        scenario_docs[scenario_id] = "\n\n".join(parts)
+        scenario_parts.setdefault(scenario_id, []).append("\n\n".join(parts))
 
-    return scenario_docs
+    return {
+        scenario_id: "\n\n".join(parts)
+        for scenario_id, parts in scenario_parts.items()
+        if parts
+    }
 
 
 def _collect_tagged_docs_legacy(docs_root: str) -> dict[str, str]:
