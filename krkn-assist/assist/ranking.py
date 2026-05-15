@@ -23,9 +23,11 @@ from .settings import (
     FINAL_BM25_WEIGHT,
     FINAL_CE_WEIGHT,
     FINAL_FAISS_WEIGHT,
+    FINAL_LEXICAL_WEIGHT,
     GITHUB_BRANCH,
     GITHUB_REPO,
     INDEX_CHUNK_OVERLAP_CHARS,
+    INDEX_SCENARIO_CHUNKS,
     INDEX_CHUNK_SIZE_CHARS,
     INDEX_DIR,
     INDEX_PATH,
@@ -45,6 +47,7 @@ from .settings import (
     RERANK_THREADS,
     RERANK_TOP_FRACTION,
     RETRIEVAL_CANDIDATE_K,
+    RETRIEVER_BATCH_SIZE,
     RETRIEVER_MODEL,
     VECTOR_SEARCH_MULTIPLIER,
 )
@@ -61,22 +64,70 @@ class IndexEntry:
     passage: str
 
 
-def score_to_match(ce_score: float, faiss_score: float, bm25_score: float) -> float:
+_LEXICAL_STOPWORDS = {
+    "about",
+    "and",
+    "are",
+    "can",
+    "create",
+    "from",
+    "how",
+    "into",
+    "label",
+    "labeled",
+    "labels",
+    "the",
+    "this",
+    "through",
+    "while",
+    "with",
+}
+
+
+def score_to_match(
+    ce_score: float,
+    faiss_score: float,
+    bm25_score: float,
+    lexical_score: float = 0.0,
+) -> float:
     ce_calibrated = calibrate_rerank_score(ce_score)
     faiss_score = max(0.0, min(1.0, float(faiss_score)))
     bm25_score = max(0.0, min(1.0, float(bm25_score)))
-    weight_total = FINAL_CE_WEIGHT + FINAL_FAISS_WEIGHT + FINAL_BM25_WEIGHT
+    lexical_score = max(0.0, min(1.0, float(lexical_score)))
+    weight_total = (
+        FINAL_CE_WEIGHT
+        + FINAL_FAISS_WEIGHT
+        + FINAL_BM25_WEIGHT
+        + FINAL_LEXICAL_WEIGHT
+    )
     if weight_total <= 0:
         return 0.0
     return (
         (FINAL_CE_WEIGHT * ce_calibrated)
         + (FINAL_FAISS_WEIGHT * faiss_score)
         + (FINAL_BM25_WEIGHT * bm25_score)
+        + (FINAL_LEXICAL_WEIGHT * lexical_score)
     ) / weight_total
 
 
 def _tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+
+def _lexical_terms(text: str) -> set[str]:
+    return {
+        token
+        for token in _tokenize(text)
+        if len(token) >= 3 and token not in _LEXICAL_STOPWORDS
+    }
+
+
+def _lexical_overlap_score(query: str, text: str) -> float:
+    query_terms = _lexical_terms(query)
+    if not query_terms:
+        return 0.0
+    text_terms = set(_tokenize(text))
+    return len(query_terms & text_terms) / len(query_terms)
 
 
 def _bm25_scores(query: str, doc_ids: list[str], doc_texts: dict[str, str]) -> dict[str, float]:
@@ -257,9 +308,11 @@ def _build_index_entries(docs: list[tuple[str, str]]) -> list[IndexEntry]:
                 scenario_id=scenario_id,
                 chunk_id=f"{scenario_id}::overview",
                 passage=overview,
-                text=f"{synopsis}\n\nOverview:\n{overview}",
+                text=search_text,
             )
         )
+        if not INDEX_SCENARIO_CHUNKS:
+            continue
 
         for idx, passage in enumerate(passages, start=1):
             entries.append(
@@ -555,6 +608,9 @@ class BaseRanker:
     def _init_models(self) -> None:
         raise NotImplementedError
 
+    def _init_index_models(self) -> None:
+        self._init_models()
+
     def _embed_query(self, query: str) -> np.ndarray:
         raise NotImplementedError
 
@@ -622,7 +678,7 @@ class BaseRanker:
         }
 
     def build_index(self, docs_dir: str = DOCS_DIR) -> None:
-        self._init_models()
+        self._init_index_models()
         docs = build_scenario_documents(
             docs_dir=docs_dir,
             github_repo=GITHUB_REPO,
@@ -724,6 +780,9 @@ class TorchRanker(BaseRanker):
     def _init_models(self) -> None:
         if self.cross_encoder is None:
             self.cross_encoder = OnnxCrossEncoder(self.cross_encoder_model_name)
+        self._init_index_models()
+
+    def _init_index_models(self) -> None:
         if self.retriever is None:
             from sentence_transformers import SentenceTransformer
 
@@ -734,16 +793,15 @@ class TorchRanker(BaseRanker):
             )
 
     def _embed_query(self, query: str) -> np.ndarray:
-        return self.retriever.encode(
-            query,
-            normalize_embeddings=True,
-            prompt_name="query",
-        ).astype(np.float32)
+        encode_kwargs = {"normalize_embeddings": True}
+        if "query" in (getattr(self.retriever, "prompts", None) or {}):
+            encode_kwargs["prompt_name"] = "query"
+        return self.retriever.encode(query, **encode_kwargs).astype(np.float32)
 
     def _embed_documents(self, texts: list[str]) -> np.ndarray:
         return self.retriever.encode(
             texts,
-            batch_size=16,
+            batch_size=RETRIEVER_BATCH_SIZE,
             normalize_embeddings=True,
             show_progress_bar=True,
         ).astype(np.float32)
@@ -871,7 +929,7 @@ def run_retrieval(
     bm25_values = [bm25_scores.get(doc_id, 0.0) for doc_id in candidate_ids]
     min_bm25 = min(bm25_values) if bm25_values else 0.0
     max_bm25 = max(bm25_values) if bm25_values else 0.0
-    retriever_weight_total = FINAL_FAISS_WEIGHT + FINAL_BM25_WEIGHT
+    retriever_weight_total = FINAL_FAISS_WEIGHT + FINAL_BM25_WEIGHT + FINAL_LEXICAL_WEIGHT
 
     candidates = []
     for doc_id in candidate_ids:
@@ -879,9 +937,12 @@ def run_retrieval(
         bm25_raw = bm25_scores.get(doc_id, 0.0)
         faiss_norm = _normalize_score(faiss_raw, min_faiss, max_faiss)
         bm25_norm = _normalize_score(bm25_raw, min_bm25, max_bm25)
+        lexical_score = _lexical_overlap_score(query, search_texts.get(doc_id, ""))
         if retriever_weight_total > 0:
             retrieval_score = (
-                (FINAL_FAISS_WEIGHT * faiss_norm) + (FINAL_BM25_WEIGHT * bm25_norm)
+                (FINAL_FAISS_WEIGHT * faiss_norm)
+                + (FINAL_BM25_WEIGHT * bm25_norm)
+                + (FINAL_LEXICAL_WEIGHT * lexical_score)
             ) / retriever_weight_total
         else:
             retrieval_score = faiss_norm
@@ -916,6 +977,7 @@ def run_retrieval(
                 "retrieval_score": retrieval_score,
                 "faiss_score": faiss_norm,
                 "bm25_score": bm25_norm,
+                "lexical_score": lexical_score,
                 "support_passages": unique_support,
             }
         )
@@ -954,6 +1016,7 @@ def run_retrieval(
             "retrieval_score": candidate["retrieval_score"],
             "faiss_score": candidate["faiss_score"],
             "bm25_score": candidate["bm25_score"],
+            "lexical_score": candidate["lexical_score"],
             "support_passages": candidate.get("support_passages", []),
         }
         for candidate, score in zip(candidates, rerank_scores)
@@ -963,6 +1026,7 @@ def run_retrieval(
             row["score"],
             row.get("faiss_score", 0.0),
             row.get("bm25_score", 0.0),
+            row.get("lexical_score", 0.0),
         )
     results.sort(key=lambda row: row["final_score"], reverse=True)
 

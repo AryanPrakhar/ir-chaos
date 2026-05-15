@@ -8,6 +8,12 @@ KRKNCTL_BRANCH="${KRKNCTL_BRANCH:-gpu_check}"
 KRKNCTL_DIR="${KRKNCTL_DIR:-$HOME/krknctl}"
 QUERY="${KRKNCTL_ASSIST_QUERY:-how do i run a pod deletion scenario}"
 EXPECTED_SCENARIO="${KRKNCTL_ASSIST_EXPECTED:-pod-scenarios}"
+GITHUB_REPO="${GITHUB_REPO:-https://github.com/krkn-chaos/website}"
+GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
+REPO_PATH="${REPO_PATH:-content/en/docs}"
+KRKN_HUB_REPO="${KRKN_HUB_REPO:-https://github.com/krkn-chaos/krkn-hub}"
+KRKN_HUB_BRANCH="${KRKN_HUB_BRANCH:-}"
+LOCAL_DOCS_PATH="${LOCAL_DOCS_PATH:-}"
 MODE="verify"
 FORCE_BUILD=0
 SKIP_BREW=0
@@ -15,6 +21,9 @@ SKIP_KRKNCTL=0
 HOST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 LOG_DIR="${KRKNCTL_ASSIST_LOG_DIR:-$ROOT_DIR/setup-logs}"
 LOG_FILE="$LOG_DIR/krknctl-assist-setup-$(date -u +%Y%m%dT%H%M%SZ).log"
+HEALTH_TIMEOUT_SECONDS="${KRKNCTL_ASSIST_HEALTH_TIMEOUT_SECONDS:-600}"
+HF_CACHE_DIR="${KRKNCTL_ASSIST_HF_CACHE_DIR:-$ROOT_DIR/.cache/huggingface}"
+TORCH_CACHE_DIR="${KRKNCTL_ASSIST_TORCH_CACHE_DIR:-$ROOT_DIR/.cache/torch}"
 SMOKE_CONTAINER=""
 
 usage() {
@@ -35,6 +44,8 @@ Options:
   --force-build             Rebuild image even if it already exists
   --skip-brew               Do not install Homebrew packages
   --skip-krknctl            Do not clone/build/run krknctl
+  Env: KRKNCTL_ASSIST_HEALTH_TIMEOUT_SECONDS
+                           Override smoke-test readiness wait in seconds
   -h, --help                Show this help
 EOF
 }
@@ -184,9 +195,17 @@ stop_assist_containers_on_8080() {
   ids="$(podman ps --format '{{.ID}} {{.Image}} {{.Names}} {{.Ports}}' 2>/dev/null \
     | awk '/8080/ && /krknctl-assist|krkn-assist/ {print $1}')"
   if [[ -n "$ids" ]]; then
-    log "Stopping old krkn assist containers bound to port 8080"
+    log "Removing old krkn assist containers bound to port 8080"
     # shellcheck disable=SC2086
-    run podman stop $ids
+    run podman rm -f $ids
+  fi
+
+  ids="$(podman ps -a --format '{{.ID}} {{.Names}} {{.Image}}' 2>/dev/null \
+    | awk '/krknctl-assist-rag|krknctl-assist-smoke/ {print $1}')"
+  if [[ -n "$ids" ]]; then
+    log "Removing stale krkn assist containers"
+    # shellcheck disable=SC2086
+    run podman rm -f $ids
   fi
 
   if have lsof && lsof -nP -iTCP:8080 -sTCP:LISTEN >/tmp/krknctl-assist-port-8080.$$ 2>/dev/null; then
@@ -220,8 +239,15 @@ image_matches_checkout() {
   if ! hash_repo_files \
       api_server.py \
       assist/api.py \
+      assist/ingestion.py \
+      assist/policy.py \
       assist/service.py \
+      assist/settings.py \
       assist/ranking.py \
+      faiss-index/krkn-scenarios.index \
+      faiss-index/krkn-scenarios.meta \
+      faiss-index/krkn-scenarios.docs.json \
+      faiss-index/krkn-scenarios.list.txt \
       data.csv \
       | awk '{print $1 " " $2}' >"$host_file"; then
     rm -f "$host_file" "$image_file"
@@ -231,8 +257,15 @@ image_matches_checkout() {
   if ! podman run --rm --entrypoint sha256sum "$IMAGE" \
     /app/api_server.py \
     /app/assist/api.py \
+    /app/assist/ingestion.py \
+    /app/assist/policy.py \
     /app/assist/service.py \
+    /app/assist/settings.py \
     /app/assist/ranking.py \
+    /app/faiss-index/krkn-scenarios.index \
+    /app/faiss-index/krkn-scenarios.meta \
+    /app/faiss-index/krkn-scenarios.docs.json \
+    /app/faiss-index/krkn-scenarios.list.txt \
     /app/data.csv \
     | sed 's#/app/##' | awk '{print $1 " " $2}' >"$image_file"; then
     rm -f "$host_file" "$image_file"
@@ -247,6 +280,71 @@ image_matches_checkout() {
   return "$status"
 }
 
+build_image() {
+  run podman build -f "$ROOT_DIR/krkn-assist/Dockerfile" -t "$IMAGE" "$ROOT_DIR"
+}
+
+warm_index_assets() {
+  local mount_suffix=""
+  local warm_index_dir="faiss-index.warm"
+  local warm_index_path="$ROOT_DIR/krkn-assist/$warm_index_dir"
+  local final_index_path="$ROOT_DIR/krkn-assist/faiss-index"
+  if [[ "$HOST_OS" != "darwin" ]]; then
+    mount_suffix=":Z"
+  fi
+
+  mkdir -p "$HF_CACHE_DIR" "$TORCH_CACHE_DIR"
+  rm -rf "$warm_index_path"
+  log "Precomputing FAISS assets before final image build"
+
+  local env_args=(
+    -e "GITHUB_REPO=$GITHUB_REPO"
+    -e "GITHUB_BRANCH=$GITHUB_BRANCH"
+    -e "REPO_PATH=$REPO_PATH"
+    -e "KRKN_HUB_REPO=$KRKN_HUB_REPO"
+    -e "INDEX_DIR=$warm_index_dir"
+    -e "HF_HOME=/root/.cache/huggingface"
+    -e "SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface"
+    -e "TORCH_HOME=/root/.cache/torch"
+  )
+  if [[ -n "$KRKN_HUB_BRANCH" ]]; then
+    env_args+=(-e "KRKN_HUB_BRANCH=$KRKN_HUB_BRANCH")
+  fi
+  if [[ -n "$LOCAL_DOCS_PATH" ]]; then
+    env_args+=(-e "LOCAL_DOCS_PATH=$LOCAL_DOCS_PATH")
+  fi
+  if [[ -n "${HF_TOKEN:-}" ]]; then
+    env_args+=(-e "HF_TOKEN=$HF_TOKEN")
+  fi
+  if [[ -n "${HUGGING_FACE_HUB_TOKEN:-}" ]]; then
+    env_args+=(-e "HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN")
+  fi
+
+  run podman run --rm \
+    -v "$ROOT_DIR/krkn-assist:/app$mount_suffix" \
+    -v "$HF_CACHE_DIR:/root/.cache/huggingface$mount_suffix" \
+    -v "$TORCH_CACHE_DIR:/root/.cache/torch$mount_suffix" \
+    "${env_args[@]}" \
+    -w /app \
+    "$IMAGE" \
+    python3 retriever.py index
+
+  test -s "$warm_index_path/krkn-scenarios.index" \
+    || fail "FAISS warm-up did not produce krkn-scenarios.index"
+  test -s "$warm_index_path/krkn-scenarios.meta" \
+    || fail "FAISS warm-up did not produce krkn-scenarios.meta"
+  test -s "$warm_index_path/krkn-scenarios.docs.json" \
+    || fail "FAISS warm-up did not produce krkn-scenarios.docs.json"
+
+  mkdir -p "$final_index_path"
+  cp -f "$warm_index_path"/krkn-scenarios.* "$final_index_path"/
+  rm -rf "$final_index_path/merged-scenarios"
+  if [[ -d "$warm_index_path/merged-scenarios" ]]; then
+    cp -R "$warm_index_path/merged-scenarios" "$final_index_path/merged-scenarios"
+  fi
+  rm -rf "$warm_index_path"
+}
+
 build_assist_image() {
   if [[ "$FORCE_BUILD" == "0" ]] && image_matches_checkout; then
     log "✅ Image already present and matches this checkout: $IMAGE"
@@ -255,13 +353,16 @@ build_assist_image() {
     warn "Existing $IMAGE does not match this checkout; rebuilding"
   fi
 
-  log "Building assist image from repo root so Dockerfile COPY paths resolve"
-  run podman build -f "$ROOT_DIR/krkn-assist/Dockerfile" -t "$IMAGE" "$ROOT_DIR"
+  log "Building bootstrap image from repo root so Dockerfile COPY paths resolve"
+  build_image
+  warm_index_assets
+  log "Rebuilding final image with warmed FAISS assets"
+  build_image
 }
 
 wait_for_health() {
   local base_url="$1"
-  local attempts="${2:-180}"
+  local attempts="${2:-$HEALTH_TIMEOUT_SECONDS}"
   local i
   for ((i=1; i<=attempts; i++)); do
     if curl -fsS "$base_url/health" >>"$LOG_FILE" 2>&1; then
@@ -286,11 +387,11 @@ smoke_test_image() {
     || fail "Unable to start smoke-test container"
   log "Started smoke-test container: $container_id"
 
-  if ! wait_for_health "http://127.0.0.1:8080" 180; then
+  if ! wait_for_health "http://127.0.0.1:8080"; then
     podman logs "$SMOKE_CONTAINER" 2>&1 | tail -n 120 | tee -a "$LOG_FILE" || true
     podman rm -f "$SMOKE_CONTAINER" >>"$LOG_FILE" 2>&1 || true
     SMOKE_CONTAINER=""
-    fail "Assist image did not become healthy"
+    fail "Assist image did not become healthy within ${HEALTH_TIMEOUT_SECONDS}s"
   fi
 
   local response
@@ -332,8 +433,15 @@ verify_image_provenance() {
   local files=(
     "api_server.py"
     "assist/api.py"
+    "assist/ingestion.py"
+    "assist/policy.py"
     "assist/service.py"
+    "assist/settings.py"
     "assist/ranking.py"
+    "faiss-index/krkn-scenarios.index"
+    "faiss-index/krkn-scenarios.meta"
+    "faiss-index/krkn-scenarios.docs.json"
+    "faiss-index/krkn-scenarios.list.txt"
     "data.csv"
   )
 
@@ -348,8 +456,15 @@ verify_image_provenance() {
   if ! podman run --rm --entrypoint sha256sum "$IMAGE" \
     /app/api_server.py \
     /app/assist/api.py \
+    /app/assist/ingestion.py \
+    /app/assist/policy.py \
     /app/assist/service.py \
+    /app/assist/settings.py \
     /app/assist/ranking.py \
+    /app/faiss-index/krkn-scenarios.index \
+    /app/faiss-index/krkn-scenarios.meta \
+    /app/faiss-index/krkn-scenarios.docs.json \
+    /app/faiss-index/krkn-scenarios.list.txt \
     /app/data.csv \
     | sed 's#/app/##' | awk '{print $1 " " $2}' >"$image_file"; then
     rm -f "$host_file" "$image_file"
