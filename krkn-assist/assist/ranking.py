@@ -3,6 +3,7 @@ import logging
 import os
 import pickle
 import re
+import subprocess
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -107,6 +108,64 @@ _INTENT_FAMILY_KEYWORDS = {
     "efs": {"efs"},
     "etcd": {"etcd"},
 }
+
+
+def probe_vulkan_devices() -> list[dict]:
+    devices: list[dict] = []
+    try:
+        result = subprocess.run(
+            ["vulkaninfo", "--summary"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+    except FileNotFoundError:
+        return devices
+    except Exception as exc:
+        logger.warning("vulkaninfo probe failed: %s", exc)
+        return devices
+
+    for line in (result.stdout + result.stderr).splitlines():
+        summary = line.strip()
+        if "deviceName" not in summary or "=" not in summary:
+            continue
+        name = summary.split("=", 1)[1].strip()
+        normalized_name = name.lower()
+        is_software = any(
+            renderer in normalized_name
+            for renderer in ("llvmpipe", "lavapipe", "softpipe", "swrast", "swiftshader")
+        )
+        devices.append(
+            {
+                "index": len(devices),
+                "name": name,
+                "software": is_software,
+            }
+        )
+    return devices
+
+
+def log_vulkan_device_status(devices: list[dict]) -> None:
+    if not devices:
+        logger.warning("vulkaninfo unavailable; unable to confirm Vulkan GPU device")
+        return
+
+    hardware_devices = [device for device in devices if not device.get("software")]
+    if hardware_devices:
+        active = hardware_devices[0]
+        logger.info(
+            "Vulkan hardware device active: %s (index=%s)",
+            active.get("name"),
+            active.get("index"),
+        )
+        return
+
+    renderer_names = ", ".join(str(device.get("name")) for device in devices)
+    logger.warning(
+        "Vulkan is using a software renderer (%s); falling back to CPU-only llama.cpp",
+        renderer_names,
+    )
 
 
 def score_to_match(
@@ -921,15 +980,26 @@ class VulkanRanker(BaseRanker):
         from llama_cpp import Llama
 
         self.model_path = model_path
-        self.gpu_layers = gpu_layers
+        self.vulkan_devices = probe_vulkan_devices()
+        log_vulkan_device_status(self.vulkan_devices)
+        hardware_devices = [device for device in self.vulkan_devices if not device.get("software")]
+        self.main_gpu = hardware_devices[0]["index"] if hardware_devices else None
+        self.gpu_layers = gpu_layers if self.main_gpu is not None else 0
         self.cross_encoder_model_name = cross_encoder_model
-        self.llm = Llama(
-            model_path=model_path,
-            embedding=True,
-            n_gpu_layers=gpu_layers,
-            verbose=False,
-            n_batch=512,
-        )
+        llama_kwargs = {
+            "model_path": model_path,
+            "embedding": True,
+            "n_gpu_layers": self.gpu_layers,
+            "verbose": False,
+            "n_batch": 512,
+        }
+        if self.main_gpu is not None and self.gpu_layers != 0:
+            llama_kwargs["main_gpu"] = int(self.main_gpu)
+        try:
+            self.llm = Llama(**llama_kwargs)
+        except TypeError:
+            llama_kwargs.pop("main_gpu", None)
+            self.llm = Llama(**llama_kwargs)
         super().__init__()
 
     def _init_models(self) -> None:
