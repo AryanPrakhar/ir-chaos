@@ -206,6 +206,32 @@ def _intent_alignment_score(query: str, scenario_id: str, text: str) -> float:
     return 1.0 if query_families & scenario_families else 0.0
 
 
+def _filter_conflicting_intent_results(
+    query: str,
+    results: list[dict],
+    doc_texts: dict[str, str],
+) -> list[dict]:
+    query_families = _detect_query_intent_families(query)
+    if not query_families:
+        return results
+
+    has_positive_intent_match = any(float(row.get("intent_score", 0.0)) > 0.0 for row in results)
+    if not has_positive_intent_match:
+        return results
+
+    filtered: list[dict] = []
+    for row in results:
+        scenario_id = str(row.get("id") or "")
+        scenario_families = _scenario_intent_families(scenario_id, doc_texts.get(scenario_id, ""))
+        if (
+            float(row.get("intent_score", 0.0)) > 0.0
+            or not scenario_families
+            or (query_families & scenario_families)
+        ):
+            filtered.append(row)
+    return filtered or results
+
+
 def _bm25_scores(query: str, doc_ids: list[str], doc_texts: dict[str, str]) -> dict[str, float]:
     terms = _tokenize(query)
     if not terms or not doc_ids:
@@ -1120,6 +1146,7 @@ def run_retrieval(
         else:
             row["final_score"] = base_final_score
     results.sort(key=lambda row: row["final_score"], reverse=True)
+    results = _filter_conflicting_intent_results(query, results, doc_texts)
 
     total_ms = (time.perf_counter() - started) * 1000
     final_results = results[:rerank_k]

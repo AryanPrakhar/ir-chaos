@@ -835,8 +835,8 @@ mkdir -p "$SHARED_DIR" "$HF_CACHE_DIR" "$TORCH_CACHE_DIR"
 # Platform-specific backend defaults
 if [[ "$BACKEND" == "auto" ]]; then
   if [[ "$HOST_OS" == "darwin" || "$HOST_OS" == "macos" ]]; then
-    BACKEND="torch"
-    vlog "macOS detected; using torch backend for reliable local setup"
+    BACKEND="vulkan"
+    vlog "macOS detected; using llama.cpp Vulkan backend for local setup"
   else
     BACKEND="torch"
     vlog "$HOST_OS detected; using torch backend"

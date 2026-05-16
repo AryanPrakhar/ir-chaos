@@ -24,6 +24,10 @@ LOG_FILE="$LOG_DIR/krknctl-assist-setup-$(date -u +%Y%m%dT%H%M%SZ).log"
 HEALTH_TIMEOUT_SECONDS="${KRKNCTL_ASSIST_HEALTH_TIMEOUT_SECONDS:-600}"
 HF_CACHE_DIR="${KRKNCTL_ASSIST_HF_CACHE_DIR:-$ROOT_DIR/.cache/huggingface}"
 TORCH_CACHE_DIR="${KRKNCTL_ASSIST_TORCH_CACHE_DIR:-$ROOT_DIR/.cache/torch}"
+GGUF_REPO="${RETRIEVER_GGUF_REPO:-Qwen/Qwen3-Embedding-0.6B-GGUF}"
+GGUF_FILE="${RETRIEVER_GGUF_FILE:-Qwen3-Embedding-0.6B-f16.gguf}"
+AUTO_DOWNLOAD_MODEL="${RETRIEVER_AUTO_DOWNLOAD_MODEL:-1}"
+HF_TOKEN_VALUE="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-${HUGGINGFACE_TOKEN:-}}}"
 SMOKE_CONTAINER=""
 
 usage() {
@@ -108,6 +112,17 @@ run_quiet() {
 
 have() {
   command -v "$1" >/dev/null 2>&1
+}
+
+download_gguf_model() {
+  local out_path="$1"
+  local url="https://huggingface.co/${GGUF_REPO}/resolve/main/${GGUF_FILE}"
+  mkdir -p "$(dirname "$out_path")"
+  local curl_args=(-L --fail --retry 3 --continue-at - -o "$out_path")
+  if [[ -n "$HF_TOKEN_VALUE" ]]; then
+    curl_args+=(-H "Authorization: Bearer $HF_TOKEN_VALUE")
+  fi
+  run curl "${curl_args[@]}" "$url"
 }
 
 stop_stale_krknctl_processes() {
@@ -316,13 +331,51 @@ warm_index_assets() {
   local warm_index_dir="faiss-index.warm"
   local warm_index_path="$ROOT_DIR/krkn-assist/$warm_index_dir"
   local final_index_path="$ROOT_DIR/krkn-assist/faiss-index"
+  local warm_backend="${RETRIEVER_BACKEND:-}"
+  local warm_model_host_path="${LLAMA_EMBED_MODEL:-}"
+  local warm_model_container_path=""
+  local warm_mount_args=()
+  local warm_run_args=()
   if [[ "$HOST_OS" != "darwin" ]]; then
     mount_suffix=":Z"
   fi
 
+  if [[ -z "$warm_backend" ]]; then
+    if [[ "$HOST_OS" == "darwin" ]]; then
+      warm_backend="vulkan"
+    else
+      warm_backend="torch"
+    fi
+  fi
+
+  if [[ "$warm_backend" == "vulkan" ]]; then
+    if [[ -z "$warm_model_host_path" ]]; then
+      warm_model_host_path="$ROOT_DIR/models/$GGUF_FILE"
+    fi
+
+    if [[ ! -f "$warm_model_host_path" ]]; then
+      if [[ "$AUTO_DOWNLOAD_MODEL" != "1" ]]; then
+        fail "Warm index requires GGUF model at $warm_model_host_path or RETRIEVER_AUTO_DOWNLOAD_MODEL=1"
+      fi
+      log "Downloading GGUF embedding model for warm index: ${GGUF_REPO}/${GGUF_FILE}"
+      download_gguf_model "$warm_model_host_path"
+    fi
+
+    local warm_model_abs
+    warm_model_abs="$(cd "$(dirname "$warm_model_host_path")" && pwd)/$(basename "$warm_model_host_path")"
+    local warm_model_basename
+    warm_model_basename="$(basename "$warm_model_abs")"
+    warm_model_container_path="/models/$warm_model_basename"
+    warm_mount_args=(-v "$(dirname "$warm_model_abs"):/models$mount_suffix")
+
+    if [[ "$HOST_OS" == "darwin" ]]; then
+      warm_run_args=(--device /dev/dri)
+    fi
+  fi
+
   mkdir -p "$HF_CACHE_DIR" "$TORCH_CACHE_DIR"
   rm -rf "$warm_index_path"
-  log "Precomputing FAISS assets before final image build"
+  log "Precomputing FAISS assets before final image build (backend=$warm_backend)"
 
   local env_args=(
     -e "GITHUB_REPO=$GITHUB_REPO"
@@ -333,6 +386,7 @@ warm_index_assets() {
     -e "HF_HOME=/root/.cache/huggingface"
     -e "SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface"
     -e "TORCH_HOME=/root/.cache/torch"
+    -e "RETRIEVER_BACKEND=$warm_backend"
   )
   local passthrough_vars=(
     RETRIEVER_BACKEND
@@ -354,6 +408,9 @@ warm_index_assets() {
       env_args+=(-e "$env_name=${!env_name}")
     fi
   done
+  if [[ -n "$warm_model_container_path" ]]; then
+    env_args+=(-e "LLAMA_EMBED_MODEL=$warm_model_container_path")
+  fi
   if [[ -n "$KRKN_HUB_BRANCH" ]]; then
     env_args+=(-e "KRKN_HUB_BRANCH=$KRKN_HUB_BRANCH")
   fi
@@ -368,9 +425,11 @@ warm_index_assets() {
   fi
 
   run podman run --rm \
+    "${warm_run_args[@]}" \
     -v "$ROOT_DIR/krkn-assist:/app$mount_suffix" \
     -v "$HF_CACHE_DIR:/root/.cache/huggingface$mount_suffix" \
     -v "$TORCH_CACHE_DIR:/root/.cache/torch$mount_suffix" \
+    "${warm_mount_args[@]}" \
     "${env_args[@]}" \
     -w /app \
     "$IMAGE" \
