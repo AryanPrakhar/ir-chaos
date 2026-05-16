@@ -425,12 +425,12 @@ warm_index_assets() {
   fi
 
   run podman run --rm \
-    "${warm_run_args[@]}" \
+    ${warm_run_args[@]+"${warm_run_args[@]}"} \
     -v "$ROOT_DIR/krkn-assist:/app$mount_suffix" \
     -v "$HF_CACHE_DIR:/root/.cache/huggingface$mount_suffix" \
     -v "$TORCH_CACHE_DIR:/root/.cache/torch$mount_suffix" \
-    "${warm_mount_args[@]}" \
-    "${env_args[@]}" \
+    ${warm_mount_args[@]+"${warm_mount_args[@]}"} \
+    ${env_args[@]+"${env_args[@]}"} \
     -w /app \
     "$IMAGE" \
     python3 retriever.py index
@@ -512,7 +512,7 @@ smoke_test_image() {
 
   local container_id
   container_id="$(podman run -d --name "$SMOKE_CONTAINER" \
-    "${env_args[@]}" \
+    ${env_args[@]+"${env_args[@]}"} \
     -p 127.0.0.1:8080:8080 "$IMAGE")" \
     || fail "Unable to start smoke-test container"
   log "Started smoke-test container: $container_id"
