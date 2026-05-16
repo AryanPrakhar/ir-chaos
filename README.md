@@ -53,6 +53,14 @@ cd ~/krknctl
 PATH="$PATH:/opt/homebrew/bin" ./krknctl assist run
 ```
 
+If you see `bind: address already in use` for port 8080, clean up stale assist
+containers first:
+
+```bash
+cd ~/ir-chaos
+./scripts/setup_krknctl_assist.sh --cleanup
+```
+
 ## API Endpoints
 
 When `./scripts/pipeline.sh --verbose` is running:
