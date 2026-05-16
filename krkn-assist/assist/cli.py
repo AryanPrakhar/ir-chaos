@@ -1,4 +1,6 @@
 import argparse
+import logging
+import os
 
 from .ranking import create_ranker
 from .settings import (
@@ -12,6 +14,7 @@ from .settings import (
 
 
 def main() -> None:
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
     parser = argparse.ArgumentParser(description="krkn retriever maintenance CLI")
     parser.add_argument(
         "--device",
