@@ -9,6 +9,8 @@ packages/
 docs/
 setup-logs/
 logs.md
+krkn-assist/faiss-index.warm/
+krkn-assist/faiss-index/merged-scenarios/
 # Local environment and key material
 .env
 .env.*

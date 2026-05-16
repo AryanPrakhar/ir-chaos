@@ -271,27 +271,41 @@ hash_repo_files() {
   )
 }
 
+repo_files_exist() {
+  (
+    cd "$ROOT_DIR/krkn-assist"
+    local relpath
+    for relpath in "$@"; do
+      [[ -e "$relpath" ]] || return 1
+    done
+  )
+}
+
 image_matches_checkout() {
   podman image exists "$IMAGE" >/dev/null 2>&1 || return 1
+
+  local files=(
+    "api_server.py"
+    "assist/api.py"
+    "assist/ingestion.py"
+    "assist/policy.py"
+    "assist/service.py"
+    "assist/settings.py"
+    "assist/ranking.py"
+    "faiss-index/krkn-scenarios.index"
+    "faiss-index/krkn-scenarios.meta"
+    "faiss-index/krkn-scenarios.docs.json"
+    "faiss-index/krkn-scenarios.list.txt"
+    "data.csv"
+  )
+
+  repo_files_exist "${files[@]}" || return 1
 
   local host_file image_file
   host_file="$(mktemp)"
   image_file="$(mktemp)"
 
-  if ! hash_repo_files \
-      api_server.py \
-      assist/api.py \
-      assist/ingestion.py \
-      assist/policy.py \
-      assist/service.py \
-      assist/settings.py \
-      assist/ranking.py \
-      faiss-index/krkn-scenarios.index \
-      faiss-index/krkn-scenarios.meta \
-      faiss-index/krkn-scenarios.docs.json \
-      faiss-index/krkn-scenarios.list.txt \
-      data.csv \
-      | awk '{print $1 " " $2}' >"$host_file"; then
+  if ! hash_repo_files "${files[@]}" | awk '{print $1 " " $2}' >"$host_file"; then
     rm -f "$host_file" "$image_file"
     return 1
   fi
