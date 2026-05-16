@@ -334,6 +334,26 @@ warm_index_assets() {
     -e "SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface"
     -e "TORCH_HOME=/root/.cache/torch"
   )
+  local passthrough_vars=(
+    RETRIEVER_BACKEND
+    RETRIEVER_MODEL
+    RETRIEVER_DEVICE
+    RETRIEVER_CPU_ONLY
+    CROSS_ENCODER_MODEL
+    LLAMA_EMBED_MODEL
+    LLAMA_GPU_LAYERS
+    RELEVANCE_THRESHOLD
+    MIN_MATCH_SCORE
+    MIN_MULTI_SCORE
+    MULTI_MATCH_SCORE_GAP
+    MAX_MULTI_SCENARIOS
+  )
+  local env_name
+  for env_name in "${passthrough_vars[@]}"; do
+    if [[ -n "${!env_name:-}" ]]; then
+      env_args+=(-e "$env_name=${!env_name}")
+    fi
+  done
   if [[ -n "$KRKN_HUB_BRANCH" ]]; then
     env_args+=(-e "KRKN_HUB_BRANCH=$KRKN_HUB_BRANCH")
   fi
@@ -409,8 +429,32 @@ smoke_test_image() {
   SMOKE_CONTAINER="krknctl-assist-smoke-$$"
   podman rm -f "$SMOKE_CONTAINER" >>"$LOG_FILE" 2>&1 || true
 
+  local env_args=()
+  local passthrough_vars=(
+    RETRIEVER_BACKEND
+    RETRIEVER_MODEL
+    RETRIEVER_DEVICE
+    RETRIEVER_CPU_ONLY
+    CROSS_ENCODER_MODEL
+    LLAMA_EMBED_MODEL
+    LLAMA_GPU_LAYERS
+    RELEVANCE_THRESHOLD
+    MIN_MATCH_SCORE
+    MIN_MULTI_SCORE
+    MULTI_MATCH_SCORE_GAP
+    MAX_MULTI_SCENARIOS
+  )
+  local env_name
+  for env_name in "${passthrough_vars[@]}"; do
+    if [[ -n "${!env_name:-}" ]]; then
+      env_args+=(-e "$env_name=${!env_name}")
+    fi
+  done
+
   local container_id
-  container_id="$(podman run -d --name "$SMOKE_CONTAINER" -p 127.0.0.1:8080:8080 "$IMAGE")" \
+  container_id="$(podman run -d --name "$SMOKE_CONTAINER" \
+    "${env_args[@]}" \
+    -p 127.0.0.1:8080:8080 "$IMAGE")" \
     || fail "Unable to start smoke-test container"
   log "Started smoke-test container: $container_id"
 

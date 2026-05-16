@@ -51,6 +51,7 @@ class QueryResponse(BaseModel):
     choices: list[QueryChoice]
     usage: Usage
     scenario_name: Optional[str] = None
+    scenario_names: list[str] = Field(default_factory=list)
     scenarios: list[dict] = Field(default_factory=list)
     timing_ms: Optional[int] = None
 
@@ -129,6 +130,7 @@ async def chat_completions(request: QueryRequest):
     scenario_name: str | None = None
     if decision.scenarios:
         scenario_name = decision.scenarios[0].get("name") or None
+    scenario_names = [row.get("name", "") for row in decision.scenarios if row.get("name")]
 
     logger.info(
         "chat_completion_time_ms=%d cache_hit=%s scenarios=%s query=%s",
@@ -146,8 +148,12 @@ async def chat_completions(request: QueryRequest):
     elif len(decision.scenarios) == 1:
         response_content = f"Scenario: {decision.scenarios[0]['name']}"
     else:
-        names = ", ".join([row["name"] for row in decision.scenarios])
-        response_content = f"Scenarios: {names}"
+        lines = ["Scenarios:"]
+        lines.extend(
+            f"{idx}. {row['name']}"
+            for idx, row in enumerate(decision.scenarios, start=1)
+        )
+        response_content = "\n".join(lines)
 
     prompt_tokens = len(user_query.split())
     completion_tokens = len(response_content.split())
@@ -170,6 +176,7 @@ async def chat_completions(request: QueryRequest):
             total_tokens=prompt_tokens + completion_tokens,
         ),
         scenario_name=scenario_name,
+        scenario_names=scenario_names,
         scenarios=decision.scenarios,
         timing_ms=decision.timing_ms,
     )

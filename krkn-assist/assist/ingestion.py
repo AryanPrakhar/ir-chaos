@@ -110,7 +110,18 @@ def _clone_repository(repo_url: str, dest: str, branch: str | None = None) -> No
 def _append_doc(doc_map: Dict[str, List[str]], scenario_id: str, content: str) -> None:
     if not scenario_id or not content:
         return
+    normalized = re.sub(r"\s+", " ", content).strip().lower()
+    if not normalized:
+        return
     parts = doc_map.setdefault(scenario_id, [])
+    for existing in parts:
+        existing_normalized = re.sub(r"\s+", " ", existing).strip().lower()
+        if not existing_normalized:
+            continue
+        if normalized == existing_normalized:
+            return
+        if normalized in existing_normalized or existing_normalized in normalized:
+            return
     parts.append(content.strip())
 
 

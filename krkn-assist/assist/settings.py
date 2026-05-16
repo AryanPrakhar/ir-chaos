@@ -7,7 +7,7 @@ CROSS_ENCODER_MODEL = os.environ.get(
 )
 RETRIEVER_MODEL = os.environ.get(
     "RETRIEVER_MODEL",
-    "sentence-transformers/all-MiniLM-L6-v2",
+    "Qwen/Qwen3-Embedding-0.6B",
 )
 
 MIN_FAISS_SCORE = 0.23
@@ -23,6 +23,9 @@ RERANK_SCORE_CEILING = float(os.environ.get("RERANK_SCORE_CEILING", "9.0"))
 RERANK_TOP_FRACTION = float(os.environ.get("RERANK_TOP_FRACTION", "0.25"))
 MIN_CE_SCORE = float(os.environ.get("MIN_CE_SCORE", str(RERANK_SCORE_FLOOR)))
 MIN_MATCH_SCORE = float(os.environ.get("MIN_MATCH_SCORE", "0.10"))
+MIN_MULTI_SCORE = float(os.environ.get("MIN_MULTI_SCORE", "0.28"))
+MULTI_MATCH_SCORE_GAP = float(os.environ.get("MULTI_MATCH_SCORE_GAP", "0.08"))
+MAX_MULTI_SCENARIOS = int(os.environ.get("MAX_MULTI_SCENARIOS", "2"))
 
 RERANK_MAX_LENGTH = int(os.environ.get("RERANK_MAX_LENGTH", "192"))
 RERANK_BATCH_SIZE = int(os.environ.get("RERANK_BATCH_SIZE", "16"))
