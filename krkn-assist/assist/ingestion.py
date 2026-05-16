@@ -210,15 +210,16 @@ def _collect_scenario_folder_docs(scenarios_root: str) -> dict[str, str]:
 
         scenario_id = _extract_scenario_id(index_content)
         if not scenario_id:
-            scenario_id = _extract_krknctl_run_scenario_id(tab_content)
-            if scenario_id:
+            scenario_id = Path(root).name
+            runnable_scenario_id = _extract_krknctl_run_scenario_id(tab_content)
+            if runnable_scenario_id:
                 logger.info(
-                    "Derived krknctl scenario id %s from %s",
+                    "Using folder name %s as source scenario id; runnable krknctl scenario is %s from %s",
                     scenario_id,
+                    runnable_scenario_id,
                     tab_path,
                 )
             else:
-                scenario_id = Path(root).name
                 logger.warning(
                     "Missing krkn-hub-scenario id in %s; using folder name %s",
                     index_path,
