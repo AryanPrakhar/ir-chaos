@@ -193,6 +193,10 @@ def decide_scenarios(
     scenarios = [
         {
             "name": str(row.get("id") or ""),
+            "runnable_name": str(row.get("runnable_name") or row.get("id") or ""),
+            "title": str(row.get("title") or row.get("name") or row.get("id") or ""),
+            "summary": str(row.get("summary") or ""),
+            "run_command": str(row.get("run_command") or ""),
             "score": round(float(row.get("final_score", 0.0)), 4),
             "rank": idx,
             "is_primary": idx == 1,

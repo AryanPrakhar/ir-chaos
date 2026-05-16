@@ -129,8 +129,16 @@ async def chat_completions(request: QueryRequest):
 
     scenario_name: str | None = None
     if decision.scenarios:
-        scenario_name = decision.scenarios[0].get("name") or None
-    scenario_names = [row.get("name", "") for row in decision.scenarios if row.get("name")]
+        scenario_name = (
+            decision.scenarios[0].get("runnable_name")
+            or decision.scenarios[0].get("name")
+            or None
+        )
+    scenario_names = [
+        row.get("runnable_name") or row.get("name", "")
+        for row in decision.scenarios
+        if row.get("runnable_name") or row.get("name")
+    ]
 
     logger.info(
         "chat_completion_time_ms=%d cache_hit=%s scenarios=%s query=%s",

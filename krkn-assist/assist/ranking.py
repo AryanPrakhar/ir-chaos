@@ -391,6 +391,21 @@ def _summary_paragraph(text: str) -> str:
     return ""
 
 
+def _extract_run_command(text: str, scenario_id: str) -> str:
+    match = re.search(r"(?im)\bkrknctl\s+run\s+[a-z0-9][a-z0-9-]*(?:[^\n`]*)", text or "")
+    if not match:
+        return f"krknctl run {scenario_id}"
+    return re.sub(r"\s+", " ", match.group(0)).strip()
+
+
+def _extract_run_scenario_id(text: str, scenario_id: str) -> str:
+    command = _extract_run_command(text, scenario_id)
+    match = re.search(r"(?i)\bkrknctl\s+run\s+([a-z0-9][a-z0-9-]*)", command)
+    if not match:
+        return scenario_id
+    return match.group(1).strip() or scenario_id
+
+
 def _search_text_for_scenario(scenario_id: str, text: str) -> str:
     title = _extract_title(text, scenario_id)
     aliases = _scenario_aliases(scenario_id, title)
@@ -1186,6 +1201,10 @@ def run_retrieval(
         {
             "id": candidate["id"],
             "name": candidate["id"].replace("-", " ").title(),
+            "title": _extract_title(candidate.get("text", ""), candidate["id"]),
+            "summary": _summary_paragraph(candidate.get("text", "")),
+            "run_command": _extract_run_command(candidate.get("text", ""), candidate["id"]),
+            "runnable_name": _extract_run_scenario_id(candidate.get("text", ""), candidate["id"]),
             "score": float(score),
             "calibrated_score": calibrate_rerank_score(score),
             "retrieval_score": candidate["retrieval_score"],
