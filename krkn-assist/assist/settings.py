@@ -17,6 +17,7 @@ FINAL_CE_WEIGHT = 0.6
 FINAL_FAISS_WEIGHT = 0.2
 FINAL_BM25_WEIGHT = 0.2
 FINAL_LEXICAL_WEIGHT = float(os.environ.get("FINAL_LEXICAL_WEIGHT", "0.3"))
+FINAL_INTENT_WEIGHT = float(os.environ.get("FINAL_INTENT_WEIGHT", "0.45"))
 MIN_QUERY_WORDS = 4
 RERANK_SCORE_FLOOR = float(os.environ.get("RERANK_SCORE_FLOOR", "-11.47"))
 RERANK_SCORE_CEILING = float(os.environ.get("RERANK_SCORE_CEILING", "9.0"))
@@ -26,6 +27,8 @@ MIN_MATCH_SCORE = float(os.environ.get("MIN_MATCH_SCORE", "0.10"))
 MIN_MULTI_SCORE = float(os.environ.get("MIN_MULTI_SCORE", "0.28"))
 MULTI_MATCH_SCORE_GAP = float(os.environ.get("MULTI_MATCH_SCORE_GAP", "0.08"))
 MAX_MULTI_SCENARIOS = int(os.environ.get("MAX_MULTI_SCENARIOS", "2"))
+INTENT_MATCH_BOOST = float(os.environ.get("INTENT_MATCH_BOOST", "0.08"))
+INTENT_MISMATCH_PENALTY = float(os.environ.get("INTENT_MISMATCH_PENALTY", "0.78"))
 
 RERANK_MAX_LENGTH = int(os.environ.get("RERANK_MAX_LENGTH", "192"))
 RERANK_BATCH_SIZE = int(os.environ.get("RERANK_BATCH_SIZE", "16"))

@@ -14,7 +14,7 @@ set -euo pipefail
 #   RETRIEVER_COMPAT_PORT=8080    # host port for /v1/chat/completions
 #   RETRIEVER_DEBUG_PORT=18080    # host port for /retrieve and /debug/*
 #   RETRIEVER_BACKEND=auto|torch|vulkan
-#   RETRIEVER_MODEL=sentence-transformers/all-MiniLM-L6-v2
+#   RETRIEVER_MODEL=Qwen/Qwen3-Embedding-0.6B
 #   RETRIEVER_ACCELERATION=auto|gpu|cpu
 #   LLAMA_EMBED_MODEL=/abs/path/to/model.gguf
 #   LLAMA_RERANKER_MODEL=/abs/path/to/reranker.gguf
@@ -98,7 +98,7 @@ AUTO_DOWNLOAD_MODEL="${RETRIEVER_AUTO_DOWNLOAD_MODEL:-1}"
 ACCELERATION_MODE="${RETRIEVER_ACCELERATION:-auto}"
 HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-${HUGGINGFACE_TOKEN:-}}}"
 CROSS_ENCODER_MODEL="${CROSS_ENCODER_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}"
-RETRIEVER_MODEL="${RETRIEVER_MODEL:-sentence-transformers/all-MiniLM-L6-v2}"
+RETRIEVER_MODEL="${RETRIEVER_MODEL:-Qwen/Qwen3-Embedding-0.6B}"
 RERANK_MAX_LENGTH="${RERANK_MAX_LENGTH:-192}"
 RERANK_BATCH_SIZE="${RERANK_BATCH_SIZE:-16}"
 RERANK_DOC_CHARS="${RERANK_DOC_CHARS:-1800}"

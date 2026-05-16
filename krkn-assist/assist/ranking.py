@@ -23,6 +23,7 @@ from .settings import (
     FINAL_BM25_WEIGHT,
     FINAL_CE_WEIGHT,
     FINAL_FAISS_WEIGHT,
+    FINAL_INTENT_WEIGHT,
     FINAL_LEXICAL_WEIGHT,
     GITHUB_BRANCH,
     GITHUB_REPO,
@@ -38,6 +39,8 @@ from .settings import (
     RERANK_SCORE_CEILING,
     RERANK_SCORE_FLOOR,
     REPO_PATH,
+    INTENT_MATCH_BOOST,
+    INTENT_MISMATCH_PENALTY,
     RERANK_BATCH_SIZE,
     RERANK_CANDIDATE_K,
     RERANK_DOC_CHARS,
@@ -83,22 +86,47 @@ _LEXICAL_STOPWORDS = {
     "with",
 }
 
+_INTENT_FAMILY_KEYWORDS = {
+    "pod": {"pod", "pods"},
+    "container": {"container", "containers"},
+    "node": {"node", "nodes", "worker", "workers"},
+    "service": {"service", "services"},
+    "network": {"network", "latency", "packet", "packets", "bandwidth", "ingress", "egress"},
+    "dns": {"dns"},
+    "pvc": {"pvc", "persistentvolumeclaim", "persistent-volume-claim"},
+    "time": {"time", "clock"},
+    "zone": {"zone", "zones", "zonal"},
+    "power": {"power", "outage", "outages"},
+    "memory": {"memory", "ram"},
+    "cpu": {"cpu"},
+    "io": {"io", "disk", "storage"},
+    "http": {"http"},
+    "vmi": {"vmi", "vm", "vms", "virtualmachine", "virtualmachines", "kubevirt"},
+    "application": {"application", "applications", "app", "apps"},
+    "aurora": {"aurora"},
+    "efs": {"efs"},
+    "etcd": {"etcd"},
+}
+
 
 def score_to_match(
     ce_score: float,
     faiss_score: float,
     bm25_score: float,
     lexical_score: float = 0.0,
+    intent_score: float = 0.0,
 ) -> float:
     ce_calibrated = calibrate_rerank_score(ce_score)
     faiss_score = max(0.0, min(1.0, float(faiss_score)))
     bm25_score = max(0.0, min(1.0, float(bm25_score)))
     lexical_score = max(0.0, min(1.0, float(lexical_score)))
+    intent_score = max(0.0, min(1.0, float(intent_score)))
     weight_total = (
         FINAL_CE_WEIGHT
         + FINAL_FAISS_WEIGHT
         + FINAL_BM25_WEIGHT
         + FINAL_LEXICAL_WEIGHT
+        + FINAL_INTENT_WEIGHT
     )
     if weight_total <= 0:
         return 0.0
@@ -107,6 +135,7 @@ def score_to_match(
         + (FINAL_FAISS_WEIGHT * faiss_score)
         + (FINAL_BM25_WEIGHT * bm25_score)
         + (FINAL_LEXICAL_WEIGHT * lexical_score)
+        + (FINAL_INTENT_WEIGHT * intent_score)
     ) / weight_total
 
 
@@ -128,6 +157,53 @@ def _lexical_overlap_score(query: str, text: str) -> float:
         return 0.0
     text_terms = set(_tokenize(text))
     return len(query_terms & text_terms) / len(query_terms)
+
+
+def _detect_query_intent_families(query: str) -> set[str]:
+    query_terms = set(_tokenize(query))
+    families = {
+        family
+        for family, keywords in _INTENT_FAMILY_KEYWORDS.items()
+        if query_terms & keywords
+    }
+    if "container" in families:
+        families.discard("pod")
+    return families
+
+
+def _scenario_intent_families(scenario_id: str, text: str) -> set[str]:
+    family_terms = set(_tokenize(f"{scenario_id} {_extract_title(text, scenario_id)}"))
+    families = {
+        family
+        for family, keywords in _INTENT_FAMILY_KEYWORDS.items()
+        if family_terms & keywords
+    }
+
+    if scenario_id.startswith("node-memory"):
+        families.add("memory")
+    if scenario_id.startswith("node-cpu"):
+        families.add("cpu")
+    if scenario_id.startswith("node-io"):
+        families.add("io")
+    if scenario_id.startswith("pod-"):
+        families.add("pod")
+    if scenario_id.startswith("container-"):
+        families.add("container")
+    if scenario_id.startswith("node-"):
+        families.add("node")
+    if "network" in scenario_id:
+        families.add("network")
+    return families
+
+
+def _intent_alignment_score(query: str, scenario_id: str, text: str) -> float:
+    query_families = _detect_query_intent_families(query)
+    if not query_families:
+        return 0.0
+    scenario_families = _scenario_intent_families(scenario_id, text)
+    if not scenario_families:
+        return 0.0
+    return 1.0 if query_families & scenario_families else 0.0
 
 
 def _bm25_scores(query: str, doc_ids: list[str], doc_texts: dict[str, str]) -> dict[str, float]:
@@ -922,6 +998,7 @@ def run_retrieval(
 
     candidate_ids = list(dict.fromkeys(faiss_top_ids + bm25_top_ids))
     retrieve_ms = (time.perf_counter() - retrieval_started) * 1000
+    query_intent_families = _detect_query_intent_families(query)
 
     faiss_values = list(faiss_scores.values()) or [0.0]
     min_faiss = min(faiss_values)
@@ -938,6 +1015,7 @@ def run_retrieval(
         faiss_norm = _normalize_score(faiss_raw, min_faiss, max_faiss)
         bm25_norm = _normalize_score(bm25_raw, min_bm25, max_bm25)
         lexical_score = _lexical_overlap_score(query, search_texts.get(doc_id, ""))
+        intent_score = _intent_alignment_score(query, doc_id, doc_texts.get(doc_id, ""))
         if retriever_weight_total > 0:
             retrieval_score = (
                 (FINAL_FAISS_WEIGHT * faiss_norm)
@@ -978,6 +1056,7 @@ def run_retrieval(
                 "faiss_score": faiss_norm,
                 "bm25_score": bm25_norm,
                 "lexical_score": lexical_score,
+                "intent_score": intent_score,
                 "support_passages": unique_support,
             }
         )
@@ -1017,17 +1096,29 @@ def run_retrieval(
             "faiss_score": candidate["faiss_score"],
             "bm25_score": candidate["bm25_score"],
             "lexical_score": candidate["lexical_score"],
+            "intent_score": candidate.get("intent_score", 0.0),
             "support_passages": candidate.get("support_passages", []),
         }
         for candidate, score in zip(candidates, rerank_scores)
     ]
     for row in results:
-        row["final_score"] = score_to_match(
+        base_final_score = score_to_match(
             row["score"],
             row.get("faiss_score", 0.0),
             row.get("bm25_score", 0.0),
             row.get("lexical_score", 0.0),
+            row.get("intent_score", 0.0),
         )
+        if query_intent_families:
+            scenario_families = _scenario_intent_families(row["id"], doc_texts.get(row["id"], ""))
+            if row.get("intent_score", 0.0) > 0:
+                row["final_score"] = min(1.0, base_final_score + INTENT_MATCH_BOOST)
+            elif scenario_families and not (query_intent_families & scenario_families):
+                row["final_score"] = max(0.0, base_final_score * INTENT_MISMATCH_PENALTY)
+            else:
+                row["final_score"] = base_final_score
+        else:
+            row["final_score"] = base_final_score
     results.sort(key=lambda row: row["final_score"], reverse=True)
 
     total_ms = (time.perf_counter() - started) * 1000
