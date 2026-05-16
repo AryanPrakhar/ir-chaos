@@ -11,6 +11,9 @@ setup-logs/
 logs.md
 krkn-assist/faiss-index.warm/
 krkn-assist/faiss-index/merged-scenarios/
+krkn-assist/faiss-index/krkn-scenarios.docs.json
+krkn-assist/faiss-index/krkn-scenarios.list.txt
+shared/
 # Local environment and key material
 .env
 .env.*
